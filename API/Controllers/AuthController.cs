@@ -233,7 +233,7 @@ public class AuthController : ControllerBase
             ? Ok(new { message = "Paramètres valides. Redirigez l'utilisateur vers la page de login.", loginUrl = result.LoginUrl })
             : BadRequest(new { error = result.ErrorMessage });
     }
-
+    
     // ── 8. Token (exchange code → access token) ────────────────────────────
     [HttpPost("token")]
     public async Task<IActionResult> Token([FromBody] TokenRequest request)
