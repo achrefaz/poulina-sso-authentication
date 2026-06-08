@@ -1,0 +1,12 @@
+E:\Work\Dev\Poulina achref\poulina-sso-authentication\Domain\bin\Debug\net10.0\Domain.deps.json
+E:\Work\Dev\Poulina achref\poulina-sso-authentication\Domain\bin\Debug\net10.0\Domain.dll
+E:\Work\Dev\Poulina achref\poulina-sso-authentication\Domain\bin\Debug\net10.0\Domain.pdb
+E:\Work\Dev\Poulina achref\poulina-sso-authentication\Domain\obj\Debug\net10.0\Domain.csproj.AssemblyReference.cache
+E:\Work\Dev\Poulina achref\poulina-sso-authentication\Domain\obj\Debug\net10.0\Domain.GeneratedMSBuildEditorConfig.editorconfig
+E:\Work\Dev\Poulina achref\poulina-sso-authentication\Domain\obj\Debug\net10.0\Domain.AssemblyInfoInputs.cache
+E:\Work\Dev\Poulina achref\poulina-sso-authentication\Domain\obj\Debug\net10.0\Domain.AssemblyInfo.cs
+E:\Work\Dev\Poulina achref\poulina-sso-authentication\Domain\obj\Debug\net10.0\Domain.csproj.CoreCompileInputs.cache
+E:\Work\Dev\Poulina achref\poulina-sso-authentication\Domain\obj\Debug\net10.0\Domain.dll
+E:\Work\Dev\Poulina achref\poulina-sso-authentication\Domain\obj\Debug\net10.0\refint\Domain.dll
+E:\Work\Dev\Poulina achref\poulina-sso-authentication\Domain\obj\Debug\net10.0\Domain.pdb
+E:\Work\Dev\Poulina achref\poulina-sso-authentication\Domain\obj\Debug\net10.0\ref\Domain.dll
