@@ -15,24 +15,21 @@ builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
-// ── DbContext ──────────────────────────────────────────────────────────────────
+// ── DbContext ──────────────────────────────────────────────────────────────
 builder.Services.AddDbContext<ApplicationDbContext>(options =>
     options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
 
-// ── Repositories ───────────────────────────────────────────────────────────────
+// ── Repositories ───────────────────────────────────────────────────────────
 builder.Services.AddScoped<IAuthRepository, AuthRepository>();
 
-// ── Infrastructure ─────────────────────────────────────────────────────────────
+// ── Infrastructure ─────────────────────────────────────────────────────────
 builder.Services.AddScoped<IPasswordHasher, PasswordHasher>();
-// Note : OtpNet est utilisé directement dans AuthHandlers via AuthHandlerBase.ValidateTotp()
-// et SetupMfaHandler — aucune interface supplémentaire requise.
 
-// ── MediatR ────────────────────────────────────────────────────────────────────
-// Tous les handlers (y compris MFA) sont dans le même assembly Domain.Handlers.Auth
+// ── MediatR ────────────────────────────────────────────────────────────────
 builder.Services.AddMediatR(cfg =>
     cfg.RegisterServicesFromAssembly(typeof(RegisterHandler).Assembly));
 
-// ── CORS — autoriser les apps clientes à envoyer les cookies ───────────────────
+// ── CORS — autoriser les apps clientes à envoyer les cookies ───────────────
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("SsoClients", policy =>
@@ -49,7 +46,7 @@ builder.Services.AddCors(options =>
     });
 });
 
-// ── JWT Authentication ─────────────────────────────────────────────────────────
+// ── JWT Authentication ─────────────────────────────────────────────────────
 var jwtSettings = builder.Configuration.GetSection("JwtSettings");
 var secretKey   = Encoding.UTF8.GetBytes(
     jwtSettings["SecretKey"] ?? "poulina-sso-super-secret-key-minimum-32-characters-2024");
@@ -78,7 +75,7 @@ builder.Services.AddAuthentication(options =>
 
 var app = builder.Build();
 
-// ── Migration automatique au démarrage ────────────────────────────────────────
+// ── Migration automatique au démarrage ────────────────────────────────────
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
@@ -92,7 +89,7 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseHttpsRedirection();
-app.UseCors("SsoClients");
+app.UseCors("SsoClients");                        
 app.UseAuthentication();
 app.UseMiddleware<TokenBlacklistMiddleware>();
 app.UseAuthorization();
