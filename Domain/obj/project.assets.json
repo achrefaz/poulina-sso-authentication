@@ -319,6 +319,15 @@
           }
         }
       },
+      "Otp.NET/1.4.1": {
+        "type": "package",
+        "compile": {
+          "lib/net10.0/Otp.NET.dll": {}
+        },
+        "runtime": {
+          "lib/net10.0/Otp.NET.dll": {}
+        }
+      },
       "System.IdentityModel.Tokens.Jwt/6.35.0": {
         "type": "package",
         "dependencies": {
@@ -853,6 +862,28 @@
         "microsoft.identitymodel.tokens.nuspec"
       ]
     },
+    "Otp.NET/1.4.1": {
+      "sha512": "UXjZ80T6BfVACJWmEcz4UFZ93hwX3STKojKvVpPk3qUhubjnLwIiZMsI4Hh91HhYxC0JlatNdNrVK2wkv4O9/Q==",
+      "type": "package",
+      "path": "otp.net/1.4.1",
+      "files": [
+        ".nupkg.metadata",
+        ".signature.p7s",
+        "LICENSE.txt",
+        "README.md",
+        "icon.png",
+        "lib/net10.0/Otp.NET.dll",
+        "lib/net461/Otp.NET.dll",
+        "lib/net5.0/Otp.NET.dll",
+        "lib/net6.0/Otp.NET.dll",
+        "lib/net7.0/Otp.NET.dll",
+        "lib/net8.0/Otp.NET.dll",
+        "lib/net9.0/Otp.NET.dll",
+        "lib/netstandard2.0/Otp.NET.dll",
+        "otp.net.1.4.1.nupkg.sha512",
+        "otp.net.nuspec"
+      ]
+    },
     "System.IdentityModel.Tokens.Jwt/6.35.0": {
       "sha512": "yxGIQd3BFK7F6S62/7RdZk3C/mfwyVxvh6ngd1VYMBmbJ1YZZA9+Ku6suylVtso0FjI0wbElpJ0d27CdsyLpBQ==",
       "type": "package",
@@ -883,6 +914,7 @@
       "MediatR >= 14.1.0",
       "Microsoft.EntityFrameworkCore >= 9.0.4",
       "Microsoft.Extensions.Configuration.Abstractions >= 9.0.4",
+      "Otp.NET >= 1.4.1",
       "System.IdentityModel.Tokens.Jwt >= 6.35.0"
     ]
   },
@@ -951,6 +983,10 @@
           "Microsoft.Extensions.Configuration.Abstractions": {
             "target": "Package",
             "version": "[9.0.4, )"
+          },
+          "Otp.NET": {
+            "target": "Package",
+            "version": "[1.4.1, )"
           },
           "System.IdentityModel.Tokens.Jwt": {
             "target": "Package",

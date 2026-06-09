@@ -2,8 +2,9 @@
 
 namespace Domain.Commands.Auth
 {
-    // ── DTOs ──────────────────────────────────────────────────────────────────
-    // Moved here from API.Controllers so Domain owns its own request contracts.
+   
+    // DTOs — Requêtes entrantes (owned by Domain, not by API layer)
+    
 
     public class RegisterRequest
     {
@@ -49,8 +50,25 @@ namespace Domain.Commands.Auth
         public string  RedirectUri  { get; set; } = string.Empty;
         public string? CodeVerifier { get; set; }
     }
+    
 
-    // ── 1. Register ───────────────────────────────────────────────────────────
+    
+    public class MfaCodeRequest
+    {
+        public string Code { get; set; } = string.Empty;
+    }
+
+    
+    public class MfaVerifyRequest
+    {
+        public string MfaPendingToken { get; set; } = string.Empty;
+        public string Code            { get; set; } = string.Empty;
+    }
+
+    
+    //  Register
+    
+
     public record RegisterCommand(RegisterRequest Request) : IRequest<RegisterResult>;
 
     public class RegisterResult
@@ -60,7 +78,10 @@ namespace Domain.Commands.Auth
         public Guid?   UserId  { get; set; }
     }
 
-    // ── 2. Login direct ───────────────────────────────────────────────────────
+    
+    //  Login direct
+    
+
     public record LoginCommand(
         LoginRequest Request,
         string IpAddress,
@@ -79,7 +100,10 @@ namespace Domain.Commands.Auth
         public Guid?   UserId                { get; set; }
     }
 
-    // ── 3. Login with code ────────────────────────────────────────────────────
+    
+    //  Login with code (OAuth2 Authorization Code Flow)
+   
+
     public record LoginWithCodeCommand(
         LoginWithCodeRequest Request,
         string IpAddress,
@@ -95,7 +119,10 @@ namespace Domain.Commands.Auth
         public string? ErrorCode   { get; set; }
     }
 
-    // ── 4. Refresh Token ──────────────────────────────────────────────────────
+    
+    //  Refresh Token
+    
+
     public record RefreshTokenCommand(
         RefreshRequest Request,
         string IpAddress
@@ -109,7 +136,9 @@ namespace Domain.Commands.Auth
         public string? RefreshToken { get; set; }
     }
 
-    // ── 5. Logout ─────────────────────────────────────────────────────────────
+    
+    //  Logout
+    
     public record LogoutCommand(
         LogoutRequest? Request,
         Guid     UserId,
@@ -123,7 +152,10 @@ namespace Domain.Commands.Auth
         public string? Message { get; set; }
     }
 
-    // ── 6. Exchange code → token ──────────────────────────────────────────────
+   
+    // Exchange code → token
+   
+
     public record ExchangeCodeCommand(TokenRequest Request) : IRequest<ExchangeCodeResult>;
 
     public class ExchangeCodeResult
@@ -136,5 +168,69 @@ namespace Domain.Commands.Auth
         public string? TokenType        { get; set; }
         public int?    ExpiresIn        { get; set; }
         public string? Scope            { get; set; }
+    }
+
+   
+    //  MFA — Setup (générer secret TOTP + QR code)
+   
+
+    public record SetupMfaCommand(Guid UserId) : IRequest<SetupMfaResult>;
+
+    public class SetupMfaResult
+    {
+        public bool    Success      { get; set; }
+        public string? Message      { get; set; }
+        
+        public string? OtpAuthUri   { get; set; }
+        
+        public string? QrCodeUrl    { get; set; }
+        
+        public string? ManualSecret { get; set; }
+    }
+
+    
+    //  MFA — Verify Setup (activer définitivement le MFA)
+    
+
+    public record VerifyMfaSetupCommand(Guid UserId, string Code) : IRequest<VerifyMfaSetupResult>;
+
+    public class VerifyMfaSetupResult
+    {
+        public bool    Success { get; set; }
+        public string? Message { get; set; }
+    }
+
+   
+    //  MFA — Verify Login (step 2 : valider le code TOTP après login)
+    
+
+    public record VerifyMfaLoginCommand(
+        string MfaPendingToken,
+        string Code,
+        string IpAddress,
+        string UserAgent
+    ) : IRequest<VerifyMfaLoginResult>;
+
+    public class VerifyMfaLoginResult
+    {
+        public bool    Success               { get; set; }
+        public string? Message               { get; set; }
+        public string? ErrorCode             { get; set; }
+        public string? AccessToken           { get; set; }
+        public string? RefreshToken          { get; set; }
+        public bool    DoitChangerMotDePasse { get; set; }
+        public Guid?   UserId                { get; set; }
+    }
+
+    
+    //  MFA — Disable (désactiver le MFA après confirmation du code)
+   
+
+    public record DisableMfaCommand(Guid UserId, string Code) : IRequest<DisableMfaResult>;
+
+    public class DisableMfaResult
+    {
+        public bool    Success { get; set; }
+        public string? Message { get; set; }
     }
 }

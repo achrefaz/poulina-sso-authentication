@@ -10,6 +10,7 @@ using Domain.Interfaces;
 using Domain.Models;
 using Domain.Models.Enums;
 using Domain.Queries.Auth;
+using OtpNet;
 
 namespace Domain.Handlers.Auth
 {
@@ -21,29 +22,33 @@ namespace Domain.Handlers.Auth
         protected readonly IPasswordHasher _passwordHasher;
 
         protected AuthHandlerBase(
-            IAuthRepository  repo,
-            IConfiguration   configuration,
-            IPasswordHasher  passwordHasher)
+            IAuthRepository repo,
+            IConfiguration  configuration,
+            IPasswordHasher passwordHasher)
         {
             _repo           = repo;
             _configuration  = configuration;
             _passwordHasher = passwordHasher;
         }
 
-        protected string GenerateJwtToken(Utilisateur user, List<string> roles, string? scopes = null)
+        
+        protected (string Token, string Jti) GenerateJwtToken(
+            Utilisateur user, List<string> roles, string? scopes = null)
         {
             var jwtSettings = _configuration.GetSection("JwtSettings");
             var secretKey   = Encoding.UTF8.GetBytes(
                 jwtSettings["SecretKey"] ?? "poulina-sso-super-secret-key-minimum-32-characters-2024");
 
+            var jti = Guid.NewGuid().ToString();
+
             var claims = new List<Claim>
             {
-                new Claim(JwtRegisteredClaimNames.Sub,        user.Id.ToString()),
-                new Claim(ClaimTypes.NameIdentifier,          user.Id.ToString()),
-                new Claim(JwtRegisteredClaimNames.Email,      user.Email),
-                new Claim(JwtRegisteredClaimNames.GivenName,  user.Prenom ?? ""),
-                new Claim(JwtRegisteredClaimNames.FamilyName, user.Nom    ?? ""),
-                new Claim(JwtRegisteredClaimNames.Jti,        Guid.NewGuid().ToString())
+                new(JwtRegisteredClaimNames.Sub,        user.Id.ToString()),
+                new(ClaimTypes.NameIdentifier,           user.Id.ToString()),
+                new(JwtRegisteredClaimNames.Email,       user.Email),
+                new(JwtRegisteredClaimNames.GivenName,   user.Prenom ?? ""),
+                new(JwtRegisteredClaimNames.FamilyName,  user.Nom    ?? ""),
+                new(JwtRegisteredClaimNames.Jti,         jti)
             };
 
             foreach (var role in roles)
@@ -64,13 +69,72 @@ namespace Domain.Handlers.Auth
                 expires:            DateTime.UtcNow.AddSeconds(lifetimeSeconds),
                 signingCredentials: new SigningCredentials(
                     new SymmetricSecurityKey(secretKey),
-                    SecurityAlgorithms.HmacSha256)
-            );
+                    SecurityAlgorithms.HmacSha256));
+
+            return (new JwtSecurityTokenHandler().WriteToken(token), jti);
+        }
+
+       
+        protected string GenerateMfaPendingToken(Guid userId)
+        {
+            var jwtSettings = _configuration.GetSection("JwtSettings");
+            var secretKey   = Encoding.UTF8.GetBytes(
+                jwtSettings["SecretKey"] ?? "poulina-sso-super-secret-key-minimum-32-characters-2024");
+
+            var claims = new[]
+            {
+                new Claim(JwtRegisteredClaimNames.Sub, userId.ToString()),
+                new Claim(ClaimTypes.NameIdentifier,   userId.ToString()),
+                new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString()),
+                new Claim("mfa_pending",               "true"),
+            };
+
+            var token = new JwtSecurityToken(
+                issuer:             jwtSettings["Issuer"],
+                audience:           jwtSettings["Audience"],
+                claims:             claims,
+                expires:            DateTime.UtcNow.AddMinutes(5),
+                signingCredentials: new SigningCredentials(
+                    new SymmetricSecurityKey(secretKey),
+                    SecurityAlgorithms.HmacSha256));
 
             return new JwtSecurityTokenHandler().WriteToken(token);
         }
 
-        protected async Task<string> CreateRefreshTokenAsync(Guid userId, Guid clientId, string ipAddress)
+        
+        protected Guid ValidateMfaPendingToken(string token)
+        {
+            var jwtSettings = _configuration.GetSection("JwtSettings");
+            var key         = Encoding.UTF8.GetBytes(
+                jwtSettings["SecretKey"] ?? "poulina-sso-super-secret-key-minimum-32-characters-2024");
+
+            var handler    = new JwtSecurityTokenHandler();
+            var parameters = new TokenValidationParameters
+            {
+                ValidateIssuerSigningKey = true,
+                IssuerSigningKey         = new SymmetricSecurityKey(key),
+                ValidateIssuer           = true,
+                ValidIssuer              = jwtSettings["Issuer"],
+                ValidateAudience         = true,
+                ValidAudience            = jwtSettings["Audience"],
+                ValidateLifetime         = true,
+                ClockSkew                = TimeSpan.Zero
+            };
+
+            var principal  = handler.ValidateToken(token, parameters, out _);
+            var pending    = principal.FindFirst("mfa_pending")?.Value;
+
+            if (pending != "true")
+                throw new SecurityTokenException("Token invalide : pas un MFA pending token.");
+
+            var sub = principal.FindFirst(ClaimTypes.NameIdentifier)?.Value
+                   ?? principal.FindFirst(JwtRegisteredClaimNames.Sub)?.Value;
+
+            return Guid.Parse(sub!);
+        }
+        
+        protected async Task<string> CreateRefreshTokenAsync(
+            Guid userId, Guid clientId, string ipAddress, int lifetimeDays = 7)
         {
             var rawToken = Convert.ToBase64String(RandomNumberGenerator.GetBytes(64));
 
@@ -81,7 +145,7 @@ namespace Domain.Handlers.Auth
                 ClientId       = clientId,
                 TokenHash      = HashToken(rawToken),
                 DateCreation   = DateTime.UtcNow,
-                DateExpiration = DateTime.UtcNow.AddDays(7),
+                DateExpiration = DateTime.UtcNow.AddDays(lifetimeDays),
                 EstUtilise     = false,
                 IpAddress      = ipAddress
             });
@@ -94,6 +158,23 @@ namespace Domain.Handlers.Auth
         {
             using var sha256 = SHA256.Create();
             return Convert.ToBase64String(sha256.ComputeHash(Encoding.UTF8.GetBytes(token)));
+        }
+
+        
+        protected static bool ValidateTotp(string secret, string code)
+        {
+            if (string.IsNullOrWhiteSpace(secret) || string.IsNullOrWhiteSpace(code))
+                return false;
+            try
+            {
+                var secretBytes = Base32Encoding.ToBytes(secret);
+                var totp        = new Totp(secretBytes, step: 30, totpSize: 6);
+                return totp.VerifyTotp(
+                    code.Trim(),
+                    out _,
+                    new VerificationWindow(previous: 1, future: 1));
+            }
+            catch { return false; }
         }
 
         protected async Task LogAuditAsync(
@@ -116,9 +197,9 @@ namespace Domain.Handlers.Auth
         }
     }
 
-    // ────────────────────────────────────────────────────────────────────────
-    // 1. RegisterHandler
-    // ────────────────────────────────────────────────────────────────────────
+    
+    //  RegisterHandler
+    
     public class RegisterHandler : AuthHandlerBase, IRequestHandler<RegisterCommand, RegisterResult>
     {
         public RegisterHandler(IAuthRepository repo, IConfiguration cfg, IPasswordHasher ph)
@@ -158,9 +239,9 @@ namespace Domain.Handlers.Auth
         }
     }
 
-    // ────────────────────────────────────────────────────────────────────────
-    // 2. LoginHandler
-    // ────────────────────────────────────────────────────────────────────────
+    
+    //  LoginHandler — avec fork MFA
+   
     public class LoginHandler : AuthHandlerBase, IRequestHandler<LoginCommand, LoginResult>
     {
         public LoginHandler(IAuthRepository repo, IConfiguration cfg, IPasswordHasher ph)
@@ -210,9 +291,30 @@ namespace Domain.Handlers.Auth
                 return new LoginResult { Success = false, Message = "Email ou mot de passe incorrect." };
             }
 
+            // Réinitialiser les tentatives dès que le mot de passe est correct
             user.TentativesConnexionEchouees = 0;
             user.DateVerrouillage            = null;
-            user.DateDerniereConnexion       = DateTime.UtcNow;
+
+            // Fork MFA : si MFA activé et validé → token temporaire 
+            if (user.TypeMFA == TypeMFA.TOTP && user.MFAValidee && !string.IsNullOrEmpty(user.SecretMFA))
+            {
+                var mfaPendingToken = GenerateMfaPendingToken(user.Id);
+
+                await _repo.SaveChangesAsync(ct);
+                await LogAuditAsync(user.Id, "LOGIN_MFA_REQUIRED", "AUTH", true, cmd.IpAddress, cmd.UserAgent,
+                    "Code TOTP requis pour finaliser la connexion");
+
+                return new LoginResult
+                {
+                    Success     = true,
+                    ErrorCode   = "MFA_REQUIRED",   // signal pour le front
+                    AccessToken = mfaPendingToken,   // token court 5 min, PAS un vrai access token
+                    Message     = "Code TOTP requis pour finaliser la connexion."
+                };
+            }
+
+            //  Login standard (pas de MFA)
+            user.DateDerniereConnexion = DateTime.UtcNow;
 
             await _repo.AddSessionAsync(new Session
             {
@@ -232,9 +334,9 @@ namespace Domain.Handlers.Auth
             if (defaultClient == null)
                 return new LoginResult { Success = false, Message = "Aucune application cliente configurée." };
 
-            var roles        = user.UtilisateurRoles.Where(ur => ur.Actif).Select(ur => ur.Role.Nom).ToList();
-            var accessToken  = GenerateJwtToken(user, roles);
-            var refreshToken = await CreateRefreshTokenAsync(user.Id, defaultClient.Id, cmd.IpAddress);
+            var roles              = user.UtilisateurRoles.Where(ur => ur.Actif).Select(ur => ur.Role.Nom).ToList();
+            var (accessToken, _)   = GenerateJwtToken(user, roles);
+            var refreshToken       = await CreateRefreshTokenAsync(user.Id, defaultClient.Id, cmd.IpAddress);
 
             await _repo.SaveChangesAsync(ct);
             await LogAuditAsync(user.Id, "LOGIN_SUCCESS", "AUTH", true, cmd.IpAddress, cmd.UserAgent);
@@ -250,9 +352,9 @@ namespace Domain.Handlers.Auth
         }
     }
 
-    // ────────────────────────────────────────────────────────────────────────
-    // 3. LoginWithCodeHandler
-    // ────────────────────────────────────────────────────────────────────────
+    
+    //  LoginWithCodeHandler (OAuth2 Authorization Code Flow)
+   
     public class LoginWithCodeHandler : AuthHandlerBase, IRequestHandler<LoginWithCodeCommand, LoginWithCodeResult>
     {
         public LoginWithCodeHandler(IAuthRepository repo, IConfiguration cfg, IPasswordHasher ph)
@@ -347,11 +449,10 @@ namespace Domain.Handlers.Auth
                 DeviceInfo           = client.ClientId
             });
 
-            
             var normalizedChallenge = req.CodeChallengeMethod?.ToUpper() switch
             {
-                "S256"  => req.CodeChallenge,   
-                "PLAIN" => req.CodeChallenge,   
+                "S256"  => req.CodeChallenge,
+                "PLAIN" => req.CodeChallenge,
                 _       => req.CodeChallenge
             };
 
@@ -381,10 +482,8 @@ namespace Domain.Handlers.Auth
             };
         }
     }
-
-    // ────────────────────────────────────────────────────────────────────────
-    // 4. RefreshTokenHandler
-    // ────────────────────────────────────────────────────────────────────────
+    
+    //  RefreshTokenHandler
     public class RefreshTokenHandler : AuthHandlerBase, IRequestHandler<RefreshTokenCommand, RefreshResult>
     {
         public RefreshTokenHandler(IAuthRepository repo, IConfiguration cfg, IPasswordHasher ph)
@@ -417,9 +516,9 @@ namespace Domain.Handlers.Auth
             entity.EstUtilise      = true;
             entity.DateRevoquation = DateTime.UtcNow;
 
-            var roles        = user.UtilisateurRoles.Where(ur => ur.Actif).Select(ur => ur.Role.Nom).ToList();
-            var accessToken  = GenerateJwtToken(user, roles);
-            var refreshToken = await CreateRefreshTokenAsync(user.Id, entity.ClientId, cmd.IpAddress);
+            var roles              = user.UtilisateurRoles.Where(ur => ur.Actif).Select(ur => ur.Role.Nom).ToList();
+            var (accessToken, _)   = GenerateJwtToken(user, roles);
+            var refreshToken       = await CreateRefreshTokenAsync(user.Id, entity.ClientId, cmd.IpAddress);
 
             await _repo.SaveChangesAsync(ct);
             await LogAuditAsync(user.Id, "TOKEN_REFRESHED", "AUTH", true, cmd.IpAddress, "");
@@ -428,9 +527,9 @@ namespace Domain.Handlers.Auth
         }
     }
 
-    // ────────────────────────────────────────────────────────────────────────
-    // 5. LogoutHandler
-    // ────────────────────────────────────────────────────────────────────────
+   
+    //  LogoutHandler
+ 
     public class LogoutHandler : AuthHandlerBase, IRequestHandler<LogoutCommand, LogoutResult>
     {
         public LogoutHandler(IAuthRepository repo, IConfiguration cfg, IPasswordHasher ph)
@@ -438,11 +537,11 @@ namespace Domain.Handlers.Auth
 
         public async Task<LogoutResult> Handle(LogoutCommand cmd, CancellationToken ct)
         {
-            // ── 1. Blacklister le JWT access token courant ────────────────────
+            //  Blacklister le JWT access token courant 
             if (!string.IsNullOrEmpty(cmd.Jti))
                 await _repo.RevokeJwtAsync(cmd.Jti, cmd.TokenExpiration, ct);
 
-            // ── 2. Révoquer les Refresh Tokens ────────────────────────────────
+            //  Révoquer les Refresh Tokens 
             if (!string.IsNullOrEmpty(cmd.Request?.RefreshToken))
             {
                 var tokenHash = HashToken(cmd.Request.RefreshToken);
@@ -467,7 +566,7 @@ namespace Domain.Handlers.Auth
                     s.Statut = StatutSession.REVOQUEE;
             }
 
-            // ── 3. Nettoyer les tokens expirés en base (maintenance) ──────────
+            //  Nettoyer les tokens expirés (maintenance) 
             await _repo.CleanExpiredRevokedTokensAsync(ct);
 
             await _repo.SaveChangesAsync(ct);
@@ -477,9 +576,9 @@ namespace Domain.Handlers.Auth
         }
     }
 
-    // ────────────────────────────────────────────────────────────────────────
-    // 6. GetUserInfoHandler (Query)
-    // ────────────────────────────────────────────────────────────────────────
+    
+    //  GetUserInfoHandler
+    
     public class GetUserInfoHandler : AuthHandlerBase, IRequestHandler<GetUserInfoQuery, UserInfoResult>
     {
         public GetUserInfoHandler(IAuthRepository repo, IConfiguration cfg, IPasswordHasher ph)
@@ -506,9 +605,9 @@ namespace Domain.Handlers.Auth
         }
     }
 
-    // ────────────────────────────────────────────────────────────────────────
-    // 7. AuthorizeHandler (Query — validation paramètres OAuth2 step 1)
-    // ────────────────────────────────────────────────────────────────────────
+    
+    //  AuthorizeHandler (OAuth2 step 1 — validation paramètres)
+    
     public class AuthorizeHandler : AuthHandlerBase, IRequestHandler<AuthorizeQuery, AuthorizeResult>
     {
         public AuthorizeHandler(IAuthRepository repo, IConfiguration cfg, IPasswordHasher ph)
@@ -538,9 +637,9 @@ namespace Domain.Handlers.Auth
         }
     }
 
-    // ────────────────────────────────────────────────────────────────────────
-    // 8. ExchangeCodeHandler (Command — code → access token)
-    // ────────────────────────────────────────────────────────────────────────
+   
+    //  ExchangeCodeHandler (code → access token)
+   
     public class ExchangeCodeHandler : AuthHandlerBase, IRequestHandler<ExchangeCodeCommand, ExchangeCodeResult>
     {
         public ExchangeCodeHandler(IAuthRepository repo, IConfiguration cfg, IPasswordHasher ph)
@@ -592,10 +691,10 @@ namespace Domain.Handlers.Auth
 
             authCode.EstUtilise = true;
 
-            var user         = authCode.Utilisateur;
-            var roles        = user.UtilisateurRoles.Where(ur => ur.Actif).Select(ur => ur.Role.Nom).ToList();
-            var accessToken  = GenerateJwtToken(user, roles, authCode.Scopes);
-            var refreshToken = await CreateRefreshTokenAsync(user.Id, authCode.ClientId, "");
+            var user               = authCode.Utilisateur;
+            var roles              = user.UtilisateurRoles.Where(ur => ur.Actif).Select(ur => ur.Role.Nom).ToList();
+            var (accessToken, _)   = GenerateJwtToken(user, roles, authCode.Scopes);
+            var refreshToken       = await CreateRefreshTokenAsync(user.Id, authCode.ClientId, "");
 
             await _repo.SaveChangesAsync(ct);
             await LogAuditAsync(user.Id, "TOKEN_ISSUED", "AUTH", true, "", "", $"Token émis pour: {authCode.Client.Nom}");
@@ -611,4 +710,208 @@ namespace Domain.Handlers.Auth
             };
         }
     }
+
+    
+    //  SetupMfaHandler — génère secret TOTP + QR code
+    
+    public class SetupMfaHandler : AuthHandlerBase, IRequestHandler<SetupMfaCommand, SetupMfaResult>
+    {
+        public SetupMfaHandler(IAuthRepository repo, IConfiguration cfg, IPasswordHasher ph)
+            : base(repo, cfg, ph) { }
+
+        public async Task<SetupMfaResult> Handle(SetupMfaCommand cmd, CancellationToken ct)
+        {
+            var user = await _repo.GetUtilisateurByIdAsync(cmd.UserId, ct);
+            if (user is null)
+                return new SetupMfaResult { Success = false, Message = "Utilisateur introuvable." };
+
+            // Générer un nouveau secret Base32 (20 bytes = 160 bits)
+            var secretBytes = KeyGeneration.GenerateRandomKey(20);
+            var secret      = Base32Encoding.ToString(secretBytes);
+
+            // Construire l'URI otpauth://
+            var issuer      = Uri.EscapeDataString("Poulina-SSO");
+            var email       = Uri.EscapeDataString(user.Email);
+            var otpAuthUri  = $"otpauth://totp/{issuer}:{email}?secret={secret}&issuer={issuer}&algorithm=SHA1&digits=6&period=30";
+
+            // QrCodeUrl = otpAuthUri brute — le Controller (projet API) génère le PNG avec QRCoder
+            var qrCodeUrl = otpAuthUri;
+
+            // Stocker le secret — MFAValidee reste false jusqu'à /mfa/verify-setup
+            user.SecretMFA  = secret;
+            user.TypeMFA    = TypeMFA.TOTP;
+            user.MFAValidee = false;
+
+            await _repo.SaveChangesAsync(ct);
+            await LogAuditAsync(user.Id, "MFA_SETUP_INITIATED", "AUTH", true, "", "", "Setup TOTP initié");
+
+            return new SetupMfaResult
+            {
+                Success      = true,
+                OtpAuthUri   = otpAuthUri,
+                QrCodeUrl    = qrCodeUrl,
+                ManualSecret = secret,
+                Message      = "Scannez le QR code dans Google Authenticator ou Authy, puis confirmez avec /mfa/verify-setup."
+            };
+        }
+    }
+
+    
+    // VerifyMfaSetupHandler — active le MFA après confirmation du 1er code
+    
+    public class VerifyMfaSetupHandler : AuthHandlerBase, IRequestHandler<VerifyMfaSetupCommand, VerifyMfaSetupResult>
+    {
+        public VerifyMfaSetupHandler(IAuthRepository repo, IConfiguration cfg, IPasswordHasher ph)
+            : base(repo, cfg, ph) { }
+
+        public async Task<VerifyMfaSetupResult> Handle(VerifyMfaSetupCommand cmd, CancellationToken ct)
+        {
+            var user = await _repo.GetUtilisateurByIdAsync(cmd.UserId, ct);
+            if (user is null)
+                return new VerifyMfaSetupResult { Success = false, Message = "Utilisateur introuvable." };
+
+            if (string.IsNullOrEmpty(user.SecretMFA) || user.TypeMFA != TypeMFA.TOTP)
+                return new VerifyMfaSetupResult { Success = false, Message = "Aucun setup MFA en cours. Appelez d'abord POST /mfa/setup." };
+
+            if (user.MFAValidee)
+                return new VerifyMfaSetupResult { Success = false, Message = "Le MFA est déjà activé." };
+
+            if (!ValidateTotp(user.SecretMFA, cmd.Code))
+                return new VerifyMfaSetupResult { Success = false, Message = "Code TOTP invalide. Vérifiez l'heure de votre appareil et réessayez." };
+
+            user.MFAValidee = true;
+
+            await _repo.SaveChangesAsync(ct);
+            await LogAuditAsync(user.Id, "MFA_ACTIVATED", "AUTH", true, "", "", "MFA TOTP activé avec succès");
+
+            return new VerifyMfaSetupResult
+            {
+                Success = true,
+                Message = "MFA activé avec succès. Conservez votre code de secours."
+            };
+        }
+    }
+
+    
+    // VerifyMfaLoginHandler — step 2 du login quand MFA est activé
+    
+    public class VerifyMfaLoginHandler : AuthHandlerBase, IRequestHandler<VerifyMfaLoginCommand, VerifyMfaLoginResult>
+    {
+        public VerifyMfaLoginHandler(IAuthRepository repo, IConfiguration cfg, IPasswordHasher ph)
+            : base(repo, cfg, ph) { }
+
+        public async Task<VerifyMfaLoginResult> Handle(VerifyMfaLoginCommand cmd, CancellationToken ct)
+        {
+            //  Valider le MfaPendingToken 
+            Guid userId;
+            try
+            {
+                userId = ValidateMfaPendingToken(cmd.MfaPendingToken);
+            }
+            catch (Exception)
+            {
+                return new VerifyMfaLoginResult
+                {
+                    Success   = false,
+                    ErrorCode = "invalid_token",
+                    Message   = "Token MFA invalide ou expiré. Veuillez vous reconnecter."
+                };
+            }
+
+            //  Charger l'utilisateur
+            var user = await _repo.GetUtilisateurByIdAsync(userId, ct);
+            if (user is null || !user.MFAValidee || string.IsNullOrEmpty(user.SecretMFA))
+                return new VerifyMfaLoginResult { Success = false, Message = "Utilisateur introuvable ou MFA non configuré." };
+
+            if (user.Statut == StatutUtilisateur.BLOQUE || user.Statut == StatutUtilisateur.DESACTIVE)
+                return new VerifyMfaLoginResult { Success = false, Message = "Compte inactif." };
+
+            //  Vérifier le code TOTP 
+            if (!ValidateTotp(user.SecretMFA, cmd.Code))
+            {
+                await LogAuditAsync(userId, "MFA_VERIFY_FAILED", "AUTH", false, cmd.IpAddress, cmd.UserAgent,
+                    "Code TOTP incorrect");
+                await _repo.SaveChangesAsync(ct);
+
+                return new VerifyMfaLoginResult
+                {
+                    Success   = false,
+                    ErrorCode = "invalid_totp",
+                    Message   = "Code TOTP invalide."
+                };
+            }
+
+            //  Créer la session 
+            user.DateDerniereConnexion       = DateTime.UtcNow;
+            user.TentativesConnexionEchouees = 0;
+
+            await _repo.AddSessionAsync(new Session
+            {
+                Id                   = Guid.NewGuid(),
+                UtilisateurId        = user.Id,
+                SessionId            = Guid.NewGuid().ToString(),
+                IpAddress            = cmd.IpAddress,
+                UserAgent            = cmd.UserAgent,
+                DateCreation         = DateTime.UtcNow,
+                DateDerniereActivite = DateTime.UtcNow,
+                DateExpiration       = DateTime.UtcNow.AddHours(8),
+                Statut               = StatutSession.ACTIVE,
+                DeviceInfo           = "mfa-login"
+            });
+
+            //  Émettre les tokens finaux 
+            var defaultClient = await _repo.GetFirstClientAsync(ct);
+            if (defaultClient == null)
+                return new VerifyMfaLoginResult { Success = false, Message = "Aucune application cliente configurée." };
+
+            var roles              = user.UtilisateurRoles.Where(ur => ur.Actif).Select(ur => ur.Role.Nom).ToList();
+            var (accessToken, _)   = GenerateJwtToken(user, roles);
+            var refreshToken       = await CreateRefreshTokenAsync(user.Id, defaultClient.Id, cmd.IpAddress);
+
+            await _repo.SaveChangesAsync(ct);
+            await LogAuditAsync(userId, "LOGIN_MFA_SUCCESS", "AUTH", true, cmd.IpAddress, cmd.UserAgent,
+                "Connexion MFA réussie");
+
+            return new VerifyMfaLoginResult
+            {
+                Success               = true,
+                AccessToken           = accessToken,
+                RefreshToken          = refreshToken,
+                DoitChangerMotDePasse = user.DoitChangerMotDePasse,
+                UserId                = userId
+            };
+        }
+    }
+
+    
+    // désactiver le MFA
+    
+    public class DisableMfaHandler : AuthHandlerBase, IRequestHandler<DisableMfaCommand, DisableMfaResult>
+    {
+        public DisableMfaHandler(IAuthRepository repo, IConfiguration cfg, IPasswordHasher ph)
+            : base(repo, cfg, ph) { }
+
+        public async Task<DisableMfaResult> Handle(DisableMfaCommand cmd, CancellationToken ct)
+        {
+            var user = await _repo.GetUtilisateurByIdAsync(cmd.UserId, ct);
+            if (user is null)
+                return new DisableMfaResult { Success = false, Message = "Utilisateur introuvable." };
+
+            if (!user.MFAValidee || string.IsNullOrEmpty(user.SecretMFA))
+                return new DisableMfaResult { Success = false, Message = "Le MFA n'est pas activé." };
+
+            if (!ValidateTotp(user.SecretMFA, cmd.Code))
+                return new DisableMfaResult { Success = false, Message = "Code TOTP invalide." };
+
+            user.MFAValidee = false;
+            user.SecretMFA  = null;
+            user.TypeMFA    = TypeMFA.AUCUN;
+
+            await _repo.SaveChangesAsync(ct);
+            await LogAuditAsync(user.Id, "MFA_DISABLED", "AUTH", true, "", "", "MFA désactivé");
+
+            return new DisableMfaResult { Success = true, Message = "MFA désactivé avec succès." };
+        }
+    }
+
 }
