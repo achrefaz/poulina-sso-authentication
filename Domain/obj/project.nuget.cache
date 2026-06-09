@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "dgSpecHash": "HeLii68rfI0=",
+  "dgSpecHash": "MPRZjjtQD1o=",
   "success": true,
   "projectFilePath": "E:\\Work\\Dev\\Poulina achref\\poulina-sso-authentication\\Domain\\Domain.csproj",
   "expectedPackageFiles": [
@@ -23,6 +23,7 @@
     "C:\\Users\\hsine\\.nuget\\packages\\microsoft.identitymodel.jsonwebtokens\\8.14.0\\microsoft.identitymodel.jsonwebtokens.8.14.0.nupkg.sha512",
     "C:\\Users\\hsine\\.nuget\\packages\\microsoft.identitymodel.logging\\8.14.0\\microsoft.identitymodel.logging.8.14.0.nupkg.sha512",
     "C:\\Users\\hsine\\.nuget\\packages\\microsoft.identitymodel.tokens\\8.14.0\\microsoft.identitymodel.tokens.8.14.0.nupkg.sha512",
+    "C:\\Users\\hsine\\.nuget\\packages\\otp.net\\1.4.1\\otp.net.1.4.1.nupkg.sha512",
     "C:\\Users\\hsine\\.nuget\\packages\\system.identitymodel.tokens.jwt\\6.35.0\\system.identitymodel.tokens.jwt.6.35.0.nupkg.sha512"
   ],
   "logs": []

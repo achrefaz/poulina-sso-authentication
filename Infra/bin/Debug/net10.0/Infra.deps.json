@@ -581,6 +581,7 @@
           "MediatR": "14.1.0",
           "Microsoft.EntityFrameworkCore": "9.0.4",
           "Microsoft.Extensions.Configuration.Abstractions": "9.0.4",
+          "Otp.NET": "1.4.1",
           "System.IdentityModel.Tokens.Jwt": "6.35.0"
         },
         "runtime": {

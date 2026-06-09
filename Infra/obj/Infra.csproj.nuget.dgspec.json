@@ -425,6 +425,10 @@
               "target": "Package",
               "version": "[9.0.4, )"
             },
+            "Otp.NET": {
+              "target": "Package",
+              "version": "[1.4.1, )"
+            },
             "System.IdentityModel.Tokens.Jwt": {
               "target": "Package",
               "version": "[6.35.0, )"
