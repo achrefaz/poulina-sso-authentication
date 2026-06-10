@@ -11,3 +11,5 @@ obj/
 # User files
 *.user
 *.suo
+
+api/appsettings.json
