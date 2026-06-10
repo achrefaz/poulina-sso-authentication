@@ -445,6 +445,11 @@ namespace Data.Migrations
                         .HasMaxLength(256)
                         .HasColumnType("nvarchar(256)");
 
+                    b.Property<bool>("EmailVerifie")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bit")
+                        .HasDefaultValue(false);
+
                     b.Property<bool>("MFAValidee")
                         .HasColumnType("bit");
 
@@ -483,6 +488,13 @@ namespace Data.Migrations
 
                     b.Property<int>("TentativesConnexionEchouees")
                         .HasColumnType("int");
+
+                    b.Property<string>("TokenVerificationEmail")
+                        .HasMaxLength(512)
+                        .HasColumnType("nvarchar(512)");
+
+                    b.Property<DateTime?>("TokenVerificationExpiration")
+                        .HasColumnType("datetime2");
 
                     b.Property<string>("TypeMFA")
                         .IsRequired()

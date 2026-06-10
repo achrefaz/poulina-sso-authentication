@@ -2,6 +2,8 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using System.Security.Claims;
+using System.Security.Cryptography;
+using System.Text;
 using Data.Context;
 using Domain.Interfaces;
 using Domain.Models;
@@ -16,12 +18,20 @@ namespace API.Controllers;
 public class UserController : ControllerBase
 {
     private readonly ApplicationDbContext _context;
-    private readonly IPasswordHasher _passwordHasher;
+    private readonly IPasswordHasher      _passwordHasher;
+    private readonly IEmailService        _emailService;
+    private readonly IConfiguration       _configuration;
 
-    public UserController(ApplicationDbContext context, IPasswordHasher passwordHasher)
+    public UserController(
+        ApplicationDbContext context,
+        IPasswordHasher      passwordHasher,
+        IEmailService        emailService,
+        IConfiguration       configuration)
     {
-        _context = context;
+        _context        = context;
         _passwordHasher = passwordHasher;
+        _emailService   = emailService;
+        _configuration  = configuration;
     }
 
     // ── Profil ─────────────────────────────────────────────────────────────
@@ -51,6 +61,7 @@ public class UserController : ControllerBase
             user.DateBlocage,
             user.RaisonBlocage,
             user.DoitChangerMotDePasse,
+            user.EmailVerifie,
             Roles = user.UtilisateurRoles.Select(ur => ur.Role.Nom).ToList()
         });
     }
@@ -65,7 +76,7 @@ public class UserController : ControllerBase
 
         var user = await _context.Utilisateurs.FindAsync(userId);
         if (user == null) return NotFound(new { message = "Utilisateur introuvable." });
-        
+
         if (!user.DoitChangerMotDePasse)
         {
             if (string.IsNullOrEmpty(request.AncienMotDePasse))
@@ -77,22 +88,20 @@ public class UserController : ControllerBase
                 return Unauthorized(new { message = "Ancien mot de passe incorrect." });
             }
         }
-        
+
         if (string.IsNullOrEmpty(request.NouveauMotDePasse) || request.NouveauMotDePasse.Length < 8)
             return BadRequest(new { message = "Le nouveau mot de passe doit contenir au moins 8 caractères." });
 
         if (request.NouveauMotDePasse != request.ConfirmationMotDePasse)
             return BadRequest(new { message = "Les mots de passe ne correspondent pas." });
-        
+
         if (_passwordHasher.Verify(request.NouveauMotDePasse, user.MotDePasseHash))
             return BadRequest(new { message = "Le nouveau mot de passe doit être différent de l'ancien." });
 
-       
-        user.MotDePasseHash = _passwordHasher.Hash(request.NouveauMotDePasse);
+        user.MotDePasseHash        = _passwordHasher.Hash(request.NouveauMotDePasse);
         user.DoitChangerMotDePasse = false;
-        user.DateMiseAJour = DateTime.UtcNow;
+        user.DateMiseAJour         = DateTime.UtcNow;
 
-        
         var refreshTokens = await _context.RefreshTokens
             .Where(rt => rt.UtilisateurId == userId && !rt.EstUtilise
                          && rt.DateExpiration > DateTime.UtcNow)
@@ -100,10 +109,10 @@ public class UserController : ControllerBase
 
         foreach (var rt in refreshTokens)
         {
-            rt.EstUtilise = true;
+            rt.EstUtilise      = true;
             rt.DateRevoquation = DateTime.UtcNow;
         }
-        
+
         var sessions = await _context.Sessions
             .Where(s => s.UtilisateurId == userId && s.Statut == StatutSession.ACTIVE)
             .ToListAsync();
@@ -117,7 +126,7 @@ public class UserController : ControllerBase
         return Ok(new { message = "Mot de passe changé avec succès. Veuillez vous reconnecter." });
     }
 
-    // ── Admin : Utilisateurs ───────────────────────────────────────────────
+    // ── Admin : Créer utilisateur ──────────────────────────────────────────
 
     [HttpPost("admin/users")]
     [Authorize(Roles = "ADMIN")]
@@ -138,18 +147,24 @@ public class UserController : ControllerBase
         if (existingUser != null)
             return BadRequest(new { message = "Un utilisateur avec cet email existe déjà." });
 
+        // ── Générer le token de vérification email ────────────────────────
+        var (rawToken, tokenHash) = GenererTokenVerification();
+
         var user = new Utilisateur
         {
-            Id = Guid.NewGuid(),
-            Email = request.Email.Trim().ToLower(),
-            Nom = request.Nom,
-            Prenom = request.Prenom,
-            MotDePasseHash = _passwordHasher.Hash(request.Password),
-            Salt = string.Empty,
-            Statut = StatutUtilisateur.ACTIF,
-            DateCreation = DateTime.UtcNow,
-            TypeMFA = TypeMFA.AUCUN,
-            DoitChangerMotDePasse = true
+            Id                          = Guid.NewGuid(),
+            Email                       = request.Email.Trim().ToLower(),
+            Nom                         = request.Nom,
+            Prenom                      = request.Prenom,
+            MotDePasseHash              = _passwordHasher.Hash(request.Password),
+            Salt                        = string.Empty,
+            Statut                      = StatutUtilisateur.ACTIF,
+            DateCreation                = DateTime.UtcNow,
+            TypeMFA                     = TypeMFA.AUCUN,
+            DoitChangerMotDePasse       = true,
+            EmailVerifie                = false,
+            TokenVerificationEmail      = tokenHash,
+            TokenVerificationExpiration = DateTime.UtcNow.AddHours(24)
         };
 
         _context.Utilisateurs.Add(user);
@@ -163,11 +178,11 @@ public class UserController : ControllerBase
                 {
                     _context.UtilisateurRoles.Add(new UtilisateurRole
                     {
-                        UtilisateurId = user.Id,
-                        RoleId = roleId,
+                        UtilisateurId   = user.Id,
+                        RoleId          = roleId,
                         DateAssignation = DateTime.UtcNow,
-                        AssignePar = adminId.Value,
-                        Actif = true
+                        AssignePar      = adminId.Value,
+                        Actif           = true
                     });
                 }
             }
@@ -176,10 +191,23 @@ public class UserController : ControllerBase
         await _context.SaveChangesAsync();
         await LogAudit(adminId.Value, "CREATE_USER", "ADMIN", true, $"Utilisateur créé: {user.Email}");
 
-        return Ok(new { message = "Utilisateur créé avec succès.", userId = user.Id });
+        // ── Envoyer l'email de confirmation ───────────────────────────────
+        var baseUrl = _configuration["AppSettings:BaseUrl"] ?? "http://localhost:5095";
+        var lien    = $"{baseUrl}/api/Auth/confirm-email?token={Uri.EscapeDataString(rawToken)}";
+
+        await _emailService.EnvoyerEmailConfirmationAsync(
+            user.Email,
+            $"{user.Prenom} {user.Nom}",
+            lien);
+
+        return Ok(new
+        {
+            message = "Utilisateur créé avec succès. Un email de confirmation a été envoyé.",
+            userId  = user.Id
+        });
     }
-    
-    //admin voir users
+
+    // ── Admin : Lister utilisateurs ────────────────────────────────────────
 
     [HttpGet("admin/users")]
     [Authorize(Roles = "ADMIN")]
@@ -200,14 +228,15 @@ public class UserController : ControllerBase
                 u.DateBlocage,
                 u.RaisonBlocage,
                 u.DoitChangerMotDePasse,
+                u.EmailVerifie,
                 Roles = u.UtilisateurRoles.Select(ur => new { ur.Role.Id, ur.Role.Nom }).ToList()
             })
             .ToListAsync();
 
         return Ok(users);
     }
-    
-    //admin bloquer un user
+
+    // ── Admin : Bloquer ────────────────────────────────────────────────────
 
     [HttpPatch("admin/users/{userId}/bloquer")]
     [Authorize(Roles = "ADMIN")]
@@ -217,51 +246,22 @@ public class UserController : ControllerBase
         if (adminId == null) return Unauthorized();
 
         if (adminId == userId)
-            return BadRequest(new { message = "Un admin ne peut pas se bloquer lui-même." });
-
-        if (string.IsNullOrWhiteSpace(request.Raison))
-            return BadRequest(new { message = "La raison du blocage est requise." });
+            return BadRequest(new { message = "Vous ne pouvez pas bloquer votre propre compte." });
 
         var user = await _context.Utilisateurs.FindAsync(userId);
-        if (user == null)
-        {
-            await LogAudit(adminId.Value, "BLOCK_USER_FAILED", "ADMIN", false, $"Utilisateur {userId} introuvable");
-            return NotFound(new { message = "Utilisateur introuvable." });
-        }
+        if (user == null) return NotFound(new { message = "Utilisateur introuvable." });
 
-        user.Statut = StatutUtilisateur.BLOQUE;
+        user.Statut        = StatutUtilisateur.BLOQUE;
+        user.DateBlocage   = DateTime.UtcNow;
         user.RaisonBlocage = request.Raison;
-        user.DateBlocage = DateTime.UtcNow;
-        user.DateMiseAJour = DateTime.UtcNow;
-        
-        var sessions = await _context.Sessions
-            .Where(s => s.UtilisateurId == userId && s.Statut == StatutSession.ACTIVE)
-            .ToListAsync();
-        foreach (var session in sessions)
-            session.Statut = StatutSession.REVOQUEE;
-        
-        var refreshTokens = await _context.RefreshTokens
-            .Where(rt => rt.UtilisateurId == userId && !rt.EstUtilise
-                         && rt.DateExpiration > DateTime.UtcNow)
-            .ToListAsync();
-        foreach (var rt in refreshTokens)
-        {
-            rt.EstUtilise = true;
-            rt.DateRevoquation = DateTime.UtcNow;
-        }
 
         await _context.SaveChangesAsync();
-        await LogAudit(adminId.Value, "BLOCK_USER", "ADMIN", true,
-            $"Utilisateur {user.Email} bloqué. Raison: {request.Raison}");
+        await LogAudit(adminId.Value, "BLOCK_USER", "ADMIN", true, $"Utilisateur {user.Email} bloqué: {request.Raison}");
 
-        return Ok(new
-        {
-            message = $"Utilisateur {user.Email} bloqué avec succès.",
-            dateBlocage = user.DateBlocage
-        });
+        return Ok(new { message = $"Utilisateur {user.Email} bloqué avec succès." });
     }
-    
-    //admin debloquer un user
+
+    // ── Admin : Débloquer ──────────────────────────────────────────────────
 
     [HttpPatch("admin/users/{userId}/debloquer")]
     [Authorize(Roles = "ADMIN")]
@@ -271,21 +271,14 @@ public class UserController : ControllerBase
         if (adminId == null) return Unauthorized();
 
         var user = await _context.Utilisateurs.FindAsync(userId);
-        if (user == null)
-        {
-            await LogAudit(adminId.Value, "UNBLOCK_USER_FAILED", "ADMIN", false, $"Utilisateur {userId} introuvable");
-            return NotFound(new { message = "Utilisateur introuvable." });
-        }
+        if (user == null) return NotFound(new { message = "Utilisateur introuvable." });
 
-        user.Statut = StatutUtilisateur.ACTIF;
+        user.Statut        = StatutUtilisateur.ACTIF;
+        user.DateBlocage   = null;
         user.RaisonBlocage = null;
-        user.DateBlocage = null;
-        user.TentativesConnexionEchouees = 0;
-        user.DateVerrouillage = null;
-        user.DateMiseAJour = DateTime.UtcNow;
 
         await _context.SaveChangesAsync();
-        await LogAudit(adminId.Value, "UNBLOCK_USER", "ADMIN", true, $"Utilisateur {user.Email} débloqué.");
+        await LogAudit(adminId.Value, "UNBLOCK_USER", "ADMIN", true, $"Utilisateur {user.Email} débloqué");
 
         return Ok(new { message = $"Utilisateur {user.Email} débloqué avec succès." });
     }
@@ -303,7 +296,6 @@ public class UserController : ControllerBase
 
         return Ok(roles);
     }
-    //admin crée role
 
     [HttpPost("admin/roles")]
     [Authorize(Roles = "ADMIN")]
@@ -323,10 +315,10 @@ public class UserController : ControllerBase
 
         var role = new Role
         {
-            Id = Guid.NewGuid(),
-            Nom = nomNormalise,
-            Description = request.Description,
-            Actif = true,
+            Id           = Guid.NewGuid(),
+            Nom          = nomNormalise,
+            Description  = request.Description,
+            Actif        = true,
             DateCreation = DateTime.UtcNow
         };
 
@@ -336,7 +328,6 @@ public class UserController : ControllerBase
 
         return Ok(new { message = "Rôle créé avec succès.", roleId = role.Id });
     }
-    //assigne role pour un user
 
     [HttpPost("admin/users/{userId}/roles/{roleId}")]
     [Authorize(Roles = "ADMIN")]
@@ -367,21 +358,21 @@ public class UserController : ControllerBase
 
         if (existingRole != null)
         {
-            existingRole.Actif = true;
-            existingRole.DateRevocation = null;
-            existingRole.RevoquePar = null;
+            existingRole.Actif           = true;
+            existingRole.DateRevocation  = null;
+            existingRole.RevoquePar      = null;
             existingRole.DateAssignation = DateTime.UtcNow;
-            existingRole.AssignePar = adminId.Value;
+            existingRole.AssignePar      = adminId.Value;
         }
         else
         {
             _context.UtilisateurRoles.Add(new UtilisateurRole
             {
-                UtilisateurId = userId,
-                RoleId = roleId,
+                UtilisateurId   = userId,
+                RoleId          = roleId,
                 DateAssignation = DateTime.UtcNow,
-                AssignePar = adminId.Value,
-                Actif = true
+                AssignePar      = adminId.Value,
+                Actif           = true
             });
         }
 
@@ -390,7 +381,6 @@ public class UserController : ControllerBase
 
         return Ok(new { message = $"Rôle {role.Nom} assigné à {user.Email} avec succès." });
     }
-    //effacer role pour user
 
     [HttpDelete("admin/users/{userId}/roles/{roleId}")]
     [Authorize(Roles = "ADMIN")]
@@ -411,9 +401,9 @@ public class UserController : ControllerBase
             return NotFound(new { message = "Ce rôle n'est pas assigné à cet utilisateur." });
         }
 
-        utilisateurRole.Actif = false;
+        utilisateurRole.Actif          = false;
         utilisateurRole.DateRevocation = DateTime.UtcNow;
-        utilisateurRole.RevoquePar = adminId.Value;
+        utilisateurRole.RevoquePar     = adminId.Value;
 
         await _context.SaveChangesAsync();
         await LogAudit(adminId.Value, "REVOKE_ROLE", "ADMIN", true,
@@ -422,7 +412,7 @@ public class UserController : ControllerBase
         return Ok(new { message = $"Rôle {utilisateurRole.Role.Nom} révoqué avec succès." });
     }
 
-    // ── Admin : Clients (lecture seule) ───────────────────────────────────
+    // ── Admin : Clients ────────────────────────────────────────────────────
 
     [HttpGet("admin/clients")]
     [Authorize(Roles = "ADMIN")]
@@ -461,17 +451,26 @@ public class UserController : ControllerBase
     {
         _context.AuditLogs.Add(new AuditLog
         {
-            Id = Guid.NewGuid(),
+            Id            = Guid.NewGuid(),
             UtilisateurId = userId,
-            Action = action,
-            Categorie = categorie,
-            IpAddress = HttpContext.Connection.RemoteIpAddress?.ToString() ?? "",
-            UserAgent = Request.Headers["User-Agent"].ToString(),
-            DateHeure = DateTime.UtcNow,
-            Succes = succes,
-            DetailsJson = details
+            Action        = action,
+            Categorie     = categorie,
+            IpAddress     = HttpContext.Connection.RemoteIpAddress?.ToString() ?? "",
+            UserAgent     = Request.Headers["User-Agent"].ToString(),
+            DateHeure     = DateTime.UtcNow,
+            Succes        = succes,
+            DetailsJson   = details
         });
         await _context.SaveChangesAsync();
+    }
+
+    private static (string Raw, string Hash) GenererTokenVerification()
+    {
+        var raw = Convert.ToBase64String(RandomNumberGenerator.GetBytes(64))
+                         .Replace("+", "-").Replace("/", "_").TrimEnd('=');
+        using var sha256 = SHA256.Create();
+        var hash = Convert.ToBase64String(sha256.ComputeHash(Encoding.UTF8.GetBytes(raw)));
+        return (raw, hash);
     }
 }
 
@@ -479,11 +478,11 @@ public class UserController : ControllerBase
 
 public class CreateUserRequest
 {
-    public string Email { get; set; } = string.Empty;
-    public string Password { get; set; } = string.Empty;
-    public string Nom { get; set; } = string.Empty;
-    public string Prenom { get; set; } = string.Empty;
-    public List<Guid>? RoleIds { get; set; }
+    public string       Email    { get; set; } = string.Empty;
+    public string       Password { get; set; } = string.Empty;
+    public string       Nom      { get; set; } = string.Empty;
+    public string       Prenom   { get; set; } = string.Empty;
+    public List<Guid>?  RoleIds  { get; set; }
 }
 
 public class BloquerRequest
@@ -493,13 +492,13 @@ public class BloquerRequest
 
 public class CreateRoleRequest
 {
-    public string Nom { get; set; } = string.Empty;
+    public string Nom         { get; set; } = string.Empty;
     public string Description { get; set; } = string.Empty;
 }
 
 public class ChangePasswordRequest
 {
-    public string? AncienMotDePasse { get; set; }
-    public string NouveauMotDePasse { get; set; } = string.Empty;
-    public string ConfirmationMotDePasse { get; set; } = string.Empty;
+    public string? AncienMotDePasse       { get; set; }
+    public string  NouveauMotDePasse      { get; set; } = string.Empty;
+    public string  ConfirmationMotDePasse { get; set; } = string.Empty;
 }

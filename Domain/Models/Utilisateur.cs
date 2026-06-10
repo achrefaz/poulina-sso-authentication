@@ -21,11 +21,20 @@ namespace Domain.Models
         public DateTime? DateDerniereConnexion { get; set; }
         public DateTime? DateMiseAJour { get; set; }
         public int TentativesConnexionEchouees { get; set; }
-        public DateTime? DateVerrouillage { get; set; } 
-        public DateTime? DateBlocage { get; set; }        
+        public DateTime? DateVerrouillage { get; set; }
+        public DateTime? DateBlocage { get; set; }
         public string? RaisonBlocage { get; set; }
         public bool DoitChangerMotDePasse { get; set; }
+
+        // ── Email Verification
+        public bool EmailVerifie { get; set; } = false;
+
+       
+        public string? TokenVerificationEmail { get; set; }
+
         
+        public DateTime? TokenVerificationExpiration { get; set; }
+
         public virtual ICollection<Session> Sessions { get; set; } = new List<Session>();
         public virtual ICollection<RefreshToken> RefreshTokens { get; set; } = new List<RefreshToken>();
         public virtual ICollection<AuditLog> AuditLogs { get; set; } = new List<AuditLog>();

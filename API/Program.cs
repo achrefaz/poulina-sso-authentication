@@ -6,6 +6,7 @@ using Data.Context;
 using Data.Repositories;
 using Domain.Interfaces;
 using Infra.Security;
+using Infra.Services;
 using Domain.Handlers.Auth;
 using API.Middleware;
 
@@ -15,38 +16,40 @@ builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
-// ── DbContext ──────────────────────────────────────────────────────────────
+// ── DbContext 
 builder.Services.AddDbContext<ApplicationDbContext>(options =>
     options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
 
-// ── Repositories ───────────────────────────────────────────────────────────
+// ── Repositories 
 builder.Services.AddScoped<IAuthRepository, AuthRepository>();
 
-// ── Infrastructure ─────────────────────────────────────────────────────────
+// ── Infrastructure
 builder.Services.AddScoped<IPasswordHasher, PasswordHasher>();
 
-// ── MediatR ────────────────────────────────────────────────────────────────
+// ── Email Service (Brevo SMTP) 
+builder.Services.AddScoped<IEmailService, BrevoEmailService>();
+
+// ── MediatR 
 builder.Services.AddMediatR(cfg =>
     cfg.RegisterServicesFromAssembly(typeof(RegisterHandler).Assembly));
 
-// ── CORS — autoriser les apps clientes à envoyer les cookies ───────────────
+// ── CORS 
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("SsoClients", policy =>
     {
         policy
             .WithOrigins(
-                "http://localhost:3001",   // App RH
-                "http://localhost:3002",   // App Finance
-                "http://localhost:3003"    // Dashboard
-            )
+                "http://localhost:3001",
+                "http://localhost:3002",
+                "http://localhost:3003")
             .AllowAnyHeader()
             .AllowAnyMethod()
             .AllowCredentials();
     });
 });
 
-// ── JWT Authentication ─────────────────────────────────────────────────────
+// ── JWT Authentication
 var jwtSettings = builder.Configuration.GetSection("JwtSettings");
 var secretKey   = Encoding.UTF8.GetBytes(
     jwtSettings["SecretKey"] ?? "poulina-sso-super-secret-key-minimum-32-characters-2024");
@@ -75,7 +78,7 @@ builder.Services.AddAuthentication(options =>
 
 var app = builder.Build();
 
-// ── Migration automatique au démarrage ────────────────────────────────────
+// ── Migration automatique au démarrage
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
@@ -89,7 +92,7 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseHttpsRedirection();
-app.UseCors("SsoClients");                        
+app.UseCors("SsoClients");
 app.UseAuthentication();
 app.UseMiddleware<TokenBlacklistMiddleware>();
 app.UseAuthorization();
