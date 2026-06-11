@@ -41,6 +41,15 @@ namespace Data.Context
                 entity.Property(e => e.TypeMFA)
                       .HasConversion<string>()
                       .HasMaxLength(50);
+
+                // ── Email Verification ────────────────────────────────────────
+                entity.Property(e => e.EmailVerifie)
+                      .HasDefaultValue(false);
+                entity.Property(e => e.TokenVerificationEmail)
+                      .HasMaxLength(512)
+                      .IsRequired(false);
+                entity.Property(e => e.TokenVerificationExpiration)
+                      .IsRequired(false);
             });
 
             // ── Role ──────────────────────────────────────────────────────────

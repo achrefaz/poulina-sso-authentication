@@ -15,6 +15,8 @@ using OtpNet;
 namespace Domain.Handlers.Auth
 {
     
+    // Classe de base partagée par tous les handlers
+    
     public abstract class AuthHandlerBase
     {
         protected readonly IAuthRepository _repo;
@@ -31,7 +33,7 @@ namespace Domain.Handlers.Auth
             _passwordHasher = passwordHasher;
         }
 
-        
+        // ── Génération JWT access token ───────────────────────────────────────
         protected (string Token, string Jti) GenerateJwtToken(
             Utilisateur user, List<string> roles, string? scopes = null)
         {
@@ -74,7 +76,7 @@ namespace Domain.Handlers.Auth
             return (new JwtSecurityTokenHandler().WriteToken(token), jti);
         }
 
-       
+        // ── Génération MFA Pending Token (court, 5 min, claim mfa_pending=true) ──
         protected string GenerateMfaPendingToken(Guid userId)
         {
             var jwtSettings = _configuration.GetSection("JwtSettings");
@@ -101,7 +103,7 @@ namespace Domain.Handlers.Auth
             return new JwtSecurityTokenHandler().WriteToken(token);
         }
 
-        
+        // ── Valide un MfaPendingToken et retourne le userId ───────────────────
         protected Guid ValidateMfaPendingToken(string token)
         {
             var jwtSettings = _configuration.GetSection("JwtSettings");
@@ -132,7 +134,8 @@ namespace Domain.Handlers.Auth
 
             return Guid.Parse(sub!);
         }
-        
+
+        // ── Refresh Token brut + hash + persistance ───────────────────────────
         protected async Task<string> CreateRefreshTokenAsync(
             Guid userId, Guid clientId, string ipAddress, int lifetimeDays = 7)
         {
@@ -198,12 +201,21 @@ namespace Domain.Handlers.Auth
     }
 
     
-    //  RegisterHandler
+    // RegisterHandler
     
     public class RegisterHandler : AuthHandlerBase, IRequestHandler<RegisterCommand, RegisterResult>
     {
-        public RegisterHandler(IAuthRepository repo, IConfiguration cfg, IPasswordHasher ph)
-            : base(repo, cfg, ph) { }
+        private readonly IEmailService _emailService;
+
+        public RegisterHandler(
+            IAuthRepository repo,
+            IConfiguration  cfg,
+            IPasswordHasher ph,
+            IEmailService   emailService)
+            : base(repo, cfg, ph)
+        {
+            _emailService = emailService;
+        }
 
         public async Task<RegisterResult> Handle(RegisterCommand cmd, CancellationToken ct)
         {
@@ -217,31 +229,61 @@ namespace Domain.Handlers.Auth
             if (await _repo.EmailExisteAsync(req.Email, ct))
                 return new RegisterResult { Success = false, Message = "Un utilisateur avec cet email existe déjà." };
 
+            // Générer le token de vérification email
+            var (rawToken, tokenHash) = GenererTokenVerification();
+
             var user = new Utilisateur
             {
-                Id                    = Guid.NewGuid(),
-                Email                 = req.Email.Trim().ToLower(),
-                Nom                   = req.Nom,
-                Prenom                = req.Prenom,
-                MotDePasseHash        = _passwordHasher.Hash(req.Password),
-                Salt                  = string.Empty,
-                Statut                = StatutUtilisateur.ACTIF,
-                DateCreation          = DateTime.UtcNow,
-                TypeMFA               = TypeMFA.AUCUN,
-                DoitChangerMotDePasse = false
+                Id                           = Guid.NewGuid(),
+                Email                        = req.Email.Trim().ToLower(),
+                Nom                          = req.Nom,
+                Prenom                       = req.Prenom,
+                MotDePasseHash               = _passwordHasher.Hash(req.Password),
+                Salt                         = string.Empty,
+                Statut                       = StatutUtilisateur.ACTIF,
+                DateCreation                 = DateTime.UtcNow,
+                TypeMFA                      = TypeMFA.AUCUN,
+                DoitChangerMotDePasse        = false,
+                EmailVerifie                 = false,
+                TokenVerificationEmail       = tokenHash,
+                TokenVerificationExpiration  = DateTime.UtcNow.AddHours(24)
             };
 
             await _repo.AddUtilisateurAsync(user, ct);
             await _repo.SaveChangesAsync(ct);
             await LogAuditAsync(user.Id, "REGISTER", "AUTH", true, "", "", $"Nouvel utilisateur: {user.Email}");
 
-            return new RegisterResult { Success = true, Message = "Utilisateur enregistré avec succès.", UserId = user.Id };
+            // Envoyer l'email de confirmation 
+            var baseUrl = _configuration["AppSettings:BaseUrl"] ?? "http://localhost:5095";
+            var lien    = $"{baseUrl}/api/Auth/confirm-email?token={Uri.EscapeDataString(rawToken)}";
+
+            await _emailService.EnvoyerEmailConfirmationAsync(
+                user.Email,
+                $"{user.Prenom} {user.Nom}",
+                lien,
+                ct);
+
+            return new RegisterResult
+            {
+                Success = true,
+                Message = "Compte créé avec succès. Vérifiez votre email pour activer votre compte.",
+                UserId  = user.Id
+            };
+        }
+
+        private static (string Raw, string Hash) GenererTokenVerification()
+        {
+            var raw = Convert.ToBase64String(RandomNumberGenerator.GetBytes(64))
+                             .Replace("+", "-").Replace("/", "_").TrimEnd('=');
+            using var sha256 = SHA256.Create();
+            var hash = Convert.ToBase64String(sha256.ComputeHash(Encoding.UTF8.GetBytes(raw)));
+            return (raw, hash);
         }
     }
 
     
-    //  LoginHandler — avec fork MFA
-   
+    // LoginHandler — avec fork MFA
+    
     public class LoginHandler : AuthHandlerBase, IRequestHandler<LoginCommand, LoginResult>
     {
         public LoginHandler(IAuthRepository repo, IConfiguration cfg, IPasswordHasher ph)
@@ -274,6 +316,18 @@ namespace Domain.Handlers.Auth
                 return new LoginResult { Success = false, ErrorCode = "DISABLED", Message = "Votre compte est désactivé." };
             }
 
+            // Email non vérifié → bloquer la connexion
+            if (!user.EmailVerifie)
+            {
+                await LogAuditAsync(user.Id, "LOGIN_EMAIL_NOT_VERIFIED", "AUTH", false, cmd.IpAddress, cmd.UserAgent);
+                return new LoginResult
+                {
+                    Success   = false,
+                    ErrorCode = "EMAIL_NOT_VERIFIED",
+                    Message   = "Votre email n'est pas encore confirmé. Vérifiez votre boîte mail ou demandez un nouveau lien."
+                };
+            }
+
             if (user.DateVerrouillage.HasValue && user.DateVerrouillage > DateTime.UtcNow)
             {
                 await LogAuditAsync(user.Id, "LOGIN_LOCKED", "AUTH", false, cmd.IpAddress, cmd.UserAgent);
@@ -294,8 +348,7 @@ namespace Domain.Handlers.Auth
             // Réinitialiser les tentatives dès que le mot de passe est correct
             user.TentativesConnexionEchouees = 0;
             user.DateVerrouillage            = null;
-
-            // Fork MFA : si MFA activé et validé → token temporaire 
+            
             if (user.TypeMFA == TypeMFA.TOTP && user.MFAValidee && !string.IsNullOrEmpty(user.SecretMFA))
             {
                 var mfaPendingToken = GenerateMfaPendingToken(user.Id);
@@ -313,7 +366,7 @@ namespace Domain.Handlers.Auth
                 };
             }
 
-            //  Login standard (pas de MFA)
+            // Login standard (pas de MFA)
             user.DateDerniereConnexion = DateTime.UtcNow;
 
             await _repo.AddSessionAsync(new Session
@@ -353,8 +406,8 @@ namespace Domain.Handlers.Auth
     }
 
     
-    //  LoginWithCodeHandler (OAuth2 Authorization Code Flow)
-   
+    // LoginWithCodeHandler (OAuth2 Authorization Code Flow)
+    
     public class LoginWithCodeHandler : AuthHandlerBase, IRequestHandler<LoginWithCodeCommand, LoginWithCodeResult>
     {
         public LoginWithCodeHandler(IAuthRepository repo, IConfiguration cfg, IPasswordHasher ph)
@@ -404,6 +457,19 @@ namespace Domain.Handlers.Auth
                 return new LoginWithCodeResult { Success = false, Message = "Email ou mot de passe incorrect." };
             }
 
+            // Email non vérifié
+            if (!user.EmailVerifie)
+            {
+                await LogAuditAsync(user.Id, "LOGIN_EMAIL_NOT_VERIFIED", "AUTH", false, cmd.IpAddress, cmd.UserAgent);
+                return new LoginWithCodeResult
+                {
+                    Success   = false,
+                    ErrorCode = "EMAIL_NOT_VERIFIED",
+                    Message   = "Votre email n'est pas encore confirmé. Vérifiez votre boîte mail ou demandez un nouveau lien."
+                };
+            }
+
+            // Vérification client OAuth2
             var client = await _repo.GetClientByClientIdAsync(req.ClientId, ct);
 
             if (client == null)
@@ -433,7 +499,27 @@ namespace Domain.Handlers.Auth
 
             user.TentativesConnexionEchouees = 0;
             user.DateVerrouillage            = null;
-            user.DateDerniereConnexion       = DateTime.UtcNow;
+
+            // ── Fork MFA ─────────────────────────────────────────────────────
+            if (user.TypeMFA == TypeMFA.TOTP && user.MFAValidee && !string.IsNullOrEmpty(user.SecretMFA))
+            {
+                var mfaPendingToken = GenerateMfaPendingToken(user.Id);
+
+                await _repo.SaveChangesAsync(ct);
+                await LogAuditAsync(user.Id, "LOGIN_MFA_REQUIRED", "AUTH", true, cmd.IpAddress, cmd.UserAgent,
+                    "Code TOTP requis pour finaliser la connexion");
+
+                return new LoginWithCodeResult
+                {
+                    Success     = true,
+                    ErrorCode   = "MFA_REQUIRED",
+                    AccessToken = mfaPendingToken,
+                    Message     = "Code TOTP requis pour finaliser la connexion."
+                };
+            }
+            // ─────────────────────────────────────────────────────────────────
+
+            user.DateDerniereConnexion = DateTime.UtcNow;
 
             await _repo.AddSessionAsync(new Session
             {
@@ -482,8 +568,10 @@ namespace Domain.Handlers.Auth
             };
         }
     }
+
     
     //  RefreshTokenHandler
+    
     public class RefreshTokenHandler : AuthHandlerBase, IRequestHandler<RefreshTokenCommand, RefreshResult>
     {
         public RefreshTokenHandler(IAuthRepository repo, IConfiguration cfg, IPasswordHasher ph)
@@ -527,9 +615,9 @@ namespace Domain.Handlers.Auth
         }
     }
 
-   
-    //  LogoutHandler
- 
+    
+    // LogoutHandler
+    
     public class LogoutHandler : AuthHandlerBase, IRequestHandler<LogoutCommand, LogoutResult>
     {
         public LogoutHandler(IAuthRepository repo, IConfiguration cfg, IPasswordHasher ph)
@@ -566,7 +654,7 @@ namespace Domain.Handlers.Auth
                     s.Statut = StatutSession.REVOQUEE;
             }
 
-            //  Nettoyer les tokens expirés (maintenance) 
+            // Nettoyer les tokens expirés (maintenance) 
             await _repo.CleanExpiredRevokedTokensAsync(ct);
 
             await _repo.SaveChangesAsync(ct);
@@ -577,7 +665,7 @@ namespace Domain.Handlers.Auth
     }
 
     
-    //  GetUserInfoHandler
+    // GetUserInfoHandler
     
     public class GetUserInfoHandler : AuthHandlerBase, IRequestHandler<GetUserInfoQuery, UserInfoResult>
     {
@@ -600,13 +688,14 @@ namespace Domain.Handlers.Auth
                 Prenom                = user.Prenom,
                 Statut                = user.Statut.ToString(),
                 DoitChangerMotDePasse = user.DoitChangerMotDePasse,
-                Roles                 = user.UtilisateurRoles.Select(ur => ur.Role.Nom).ToList()
+                Roles                 = user.UtilisateurRoles.Select(ur => ur.Role.Nom).ToList(),
+                MfaEnabled            = user.MFAValidee
             };
         }
     }
 
     
-    //  AuthorizeHandler (OAuth2 step 1 — validation paramètres)
+    // AuthorizeHandler (OAuth2 step 1 — validation paramètres)
     
     public class AuthorizeHandler : AuthHandlerBase, IRequestHandler<AuthorizeQuery, AuthorizeResult>
     {
@@ -637,9 +726,9 @@ namespace Domain.Handlers.Auth
         }
     }
 
-   
-    //  ExchangeCodeHandler (code → access token)
-   
+    
+    // ExchangeCodeHandler (code → access token)
+    
     public class ExchangeCodeHandler : AuthHandlerBase, IRequestHandler<ExchangeCodeCommand, ExchangeCodeResult>
     {
         public ExchangeCodeHandler(IAuthRepository repo, IConfiguration cfg, IPasswordHasher ph)
@@ -712,7 +801,7 @@ namespace Domain.Handlers.Auth
     }
 
     
-    //  SetupMfaHandler — génère secret TOTP + QR code
+    // SetupMfaHandler — génère secret TOTP + QR code
     
     public class SetupMfaHandler : AuthHandlerBase, IRequestHandler<SetupMfaCommand, SetupMfaResult>
     {
@@ -729,7 +818,7 @@ namespace Domain.Handlers.Auth
             var secretBytes = KeyGeneration.GenerateRandomKey(20);
             var secret      = Base32Encoding.ToString(secretBytes);
 
-            // Construire l'URI otpauth://
+            // Construire l'URI otpauth
             var issuer      = Uri.EscapeDataString("Poulina-SSO");
             var email       = Uri.EscapeDataString(user.Email);
             var otpAuthUri  = $"otpauth://totp/{issuer}:{email}?secret={secret}&issuer={issuer}&algorithm=SHA1&digits=6&period=30";
@@ -757,7 +846,7 @@ namespace Domain.Handlers.Auth
     }
 
     
-    // VerifyMfaSetupHandler — active le MFA après confirmation du 1er code
+    //  VerifyMfaSetupHandler — active le MFA après confirmation du 1er code
     
     public class VerifyMfaSetupHandler : AuthHandlerBase, IRequestHandler<VerifyMfaSetupCommand, VerifyMfaSetupResult>
     {
@@ -793,7 +882,7 @@ namespace Domain.Handlers.Auth
     }
 
     
-    // VerifyMfaLoginHandler — step 2 du login quand MFA est activé
+    //  VerifyMfaLoginHandler — step 2 du login quand MFA est activé
     
     public class VerifyMfaLoginHandler : AuthHandlerBase, IRequestHandler<VerifyMfaLoginCommand, VerifyMfaLoginResult>
     {
@@ -802,7 +891,7 @@ namespace Domain.Handlers.Auth
 
         public async Task<VerifyMfaLoginResult> Handle(VerifyMfaLoginCommand cmd, CancellationToken ct)
         {
-            //  Valider le MfaPendingToken 
+            // Valider le MfaPendingToken
             Guid userId;
             try
             {
@@ -818,7 +907,7 @@ namespace Domain.Handlers.Auth
                 };
             }
 
-            //  Charger l'utilisateur
+            // Charger l'utilisateur
             var user = await _repo.GetUtilisateurByIdAsync(userId, ct);
             if (user is null || !user.MFAValidee || string.IsNullOrEmpty(user.SecretMFA))
                 return new VerifyMfaLoginResult { Success = false, Message = "Utilisateur introuvable ou MFA non configuré." };
@@ -826,13 +915,11 @@ namespace Domain.Handlers.Auth
             if (user.Statut == StatutUtilisateur.BLOQUE || user.Statut == StatutUtilisateur.DESACTIVE)
                 return new VerifyMfaLoginResult { Success = false, Message = "Compte inactif." };
 
-            //  Vérifier le code TOTP 
+            // Vérifier le code TOTP
             if (!ValidateTotp(user.SecretMFA, cmd.Code))
             {
-                await LogAuditAsync(userId, "MFA_VERIFY_FAILED", "AUTH", false, cmd.IpAddress, cmd.UserAgent,
-                    "Code TOTP incorrect");
+                await LogAuditAsync(userId, "MFA_VERIFY_FAILED", "AUTH", false, cmd.IpAddress, cmd.UserAgent, "Code TOTP incorrect");
                 await _repo.SaveChangesAsync(ct);
-
                 return new VerifyMfaLoginResult
                 {
                     Success   = false,
@@ -841,7 +928,7 @@ namespace Domain.Handlers.Auth
                 };
             }
 
-            //  Créer la session 
+            // Créer la session
             user.DateDerniereConnexion       = DateTime.UtcNow;
             user.TentativesConnexionEchouees = 0;
 
@@ -859,32 +946,42 @@ namespace Domain.Handlers.Auth
                 DeviceInfo           = "mfa-login"
             });
 
-            //  Émettre les tokens finaux 
-            var defaultClient = await _repo.GetFirstClientAsync(ct);
-            if (defaultClient == null)
-                return new VerifyMfaLoginResult { Success = false, Message = "Aucune application cliente configurée." };
+            // Récupérer le client OAuth2
+            var client = await _repo.GetClientByClientIdAsync(cmd.ClientId, ct);
+            if (client == null)
+                return new VerifyMfaLoginResult { Success = false, Message = "Client OAuth2 introuvable." };
 
-            var roles              = user.UtilisateurRoles.Where(ur => ur.Actif).Select(ur => ur.Role.Nom).ToList();
-            var (accessToken, _)   = GenerateJwtToken(user, roles);
-            var refreshToken       = await CreateRefreshTokenAsync(user.Id, defaultClient.Id, cmd.IpAddress);
+            // Générer un authorizationCode OAuth2 (même flow que LoginWithCode)
+            var rawCode = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
+            await _repo.AddAuthorizationCodeAsync(new AuthorizationCode
+            {
+                Id                  = Guid.NewGuid(),
+                CodeHash            = HashToken(rawCode),
+                UtilisateurId       = user.Id,
+                ClientId            = client.Id,
+                DateCreation        = DateTime.UtcNow,
+                DateExpiration      = DateTime.UtcNow.AddMinutes(5),
+                EstUtilise          = false,
+                CodeChallenge       = cmd.CodeChallenge,
+                CodeChallengeMethod = cmd.CodeChallengeMethod,
+                Scopes              = cmd.Scopes
+            });
 
             await _repo.SaveChangesAsync(ct);
-            await LogAuditAsync(userId, "LOGIN_MFA_SUCCESS", "AUTH", true, cmd.IpAddress, cmd.UserAgent,
-                "Connexion MFA réussie");
+            await LogAuditAsync(userId, "LOGIN_MFA_SUCCESS", "AUTH", true, cmd.IpAddress, cmd.UserAgent, "Connexion MFA réussie");
 
             return new VerifyMfaLoginResult
             {
-                Success               = true,
-                AccessToken           = accessToken,
-                RefreshToken          = refreshToken,
-                DoitChangerMotDePasse = user.DoitChangerMotDePasse,
-                UserId                = userId
+                Success     = true,
+                Code        = rawCode,
+                RedirectUri = $"{cmd.RedirectUri}?code={rawCode}&state={cmd.State}",
+                Message     = "MFA validé."
             };
         }
     }
 
     
-    // désactiver le MFA
+    //  DisableMfaHandler — désactiver le MFA
     
     public class DisableMfaHandler : AuthHandlerBase, IRequestHandler<DisableMfaCommand, DisableMfaResult>
     {

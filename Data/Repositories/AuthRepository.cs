@@ -122,6 +122,13 @@ namespace Data.Repositories
                 _context.RevokedTokens.RemoveRange(expired);
         }
 
+        // ── Email Verification ────────────────────────────────────────────────
+
+        public Task<Utilisateur?> GetUtilisateurByTokenVerificationAsync(
+            string tokenHash, CancellationToken ct = default)
+            => _context.Utilisateurs
+                .FirstOrDefaultAsync(u => u.TokenVerificationEmail == tokenHash, ct);
+
         // ── Persistance ───────────────────────────────────────────────────────
 
         public Task SaveChangesAsync(CancellationToken ct = default)

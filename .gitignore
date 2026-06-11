@@ -12,4 +12,5 @@ obj/
 *.user
 *.suo
 
-api/appsettings.json
+API/appsettings.json
+Data/Migrations

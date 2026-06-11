@@ -5,6 +5,7 @@ using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using Domain.Commands.Auth;
 using Domain.Queries.Auth;
+using QRCoder;
 
 namespace API.Controllers;
 
@@ -13,8 +14,6 @@ namespace API.Controllers;
 public class AuthController : ControllerBase
 {
     private readonly IMediator _mediator;
-
-    // Nom du cookie Refresh Token
     private const string RefreshTokenCookieName = "X-Refresh-Token";
 
     public AuthController(IMediator mediator)
@@ -22,17 +21,15 @@ public class AuthController : ControllerBase
         _mediator = mediator;
     }
 
-    // ── Helpers cookies ────────────────────────────────────────────────────
-
     private void SetRefreshTokenCookie(string refreshToken, int lifetimeDays = 7)
     {
         Response.Cookies.Append(RefreshTokenCookieName, refreshToken, new CookieOptions
         {
-            HttpOnly  = true,                        // inaccessible par JavaScript
-            Secure    = true,                        // HTTPS uniquement
-            SameSite  = SameSiteMode.Strict,         // bloque les requêtes cross-site
-            Expires   = DateTimeOffset.UtcNow.AddDays(lifetimeDays),
-            Path      = "/api/Auth"                  // limité aux endpoints Auth uniquement
+            HttpOnly = true,
+            Secure   = true,
+            SameSite = SameSiteMode.Strict,
+            Expires  = DateTimeOffset.UtcNow.AddDays(lifetimeDays),
+            Path     = "/api/Auth"
         });
     }
 
@@ -50,7 +47,8 @@ public class AuthController : ControllerBase
     private string? GetRefreshTokenFromCookie()
         => Request.Cookies[RefreshTokenCookieName];
 
-    // ── 1. Register ────────────────────────────────────────────────────────
+    // Register
+
     [HttpPost("register")]
     public async Task<IActionResult> Register([FromBody] RegisterRequest request)
     {
@@ -60,7 +58,8 @@ public class AuthController : ControllerBase
             : BadRequest(new { message = result.Message });
     }
 
-    // ── 2. Login direct ────────────────────────────────────────────────────
+    // Login direct
+
     [HttpPost("login")]
     public async Task<IActionResult> Login([FromBody] LoginRequest request)
     {
@@ -73,14 +72,24 @@ public class AuthController : ControllerBase
         {
             return result.ErrorCode switch
             {
-                "BLOCKED"  => Unauthorized(new { message = result.Message, raison = result.Raison }),
-                "DISABLED" => Unauthorized(new { message = result.Message }),
-                "LOCKED"   => Unauthorized(new { message = result.Message }),
-                _          => Unauthorized(new { message = result.Message })
+                "BLOCKED"            => Unauthorized(new { message = result.Message, raison = result.Raison }),
+                "DISABLED"           => Unauthorized(new { message = result.Message }),
+                "LOCKED"             => Unauthorized(new { message = result.Message }),
+                "EMAIL_NOT_VERIFIED" => Unauthorized(new { message = result.Message, errorCode = result.ErrorCode }),
+                _                    => Unauthorized(new { message = result.Message })
             };
         }
 
-        // Refresh Token → Cookie HttpOnly (jamais exposé dans le body)
+        if (result.ErrorCode == "MFA_REQUIRED")
+        {
+            return Ok(new
+            {
+                mfaRequired     = true,
+                mfaPendingToken = result.AccessToken,
+                message         = result.Message
+            });
+        }
+
         if (result.RefreshToken != null)
             SetRefreshTokenCookie(result.RefreshToken);
 
@@ -98,7 +107,8 @@ public class AuthController : ControllerBase
         return Ok(response);
     }
 
-    // ── 3. Login with code (OAuth2 Authorization Code Flow) ────────────────
+    // Login with code (OAuth2 Authorization Code Flow)
+
     [HttpPost("login-with-code")]
     public async Task<IActionResult> LoginWithCode([FromBody] LoginWithCodeRequest request)
     {
@@ -115,18 +125,32 @@ public class AuthController : ControllerBase
                 "invalid_redirect_uri"    => BadRequest(new { error = result.ErrorCode, message = result.Message }),
                 "code_challenge_required" => BadRequest(new { error = result.ErrorCode, message = result.Message }),
                 "access_denied"           => StatusCode(403, new { error = result.ErrorCode, message = result.Message }),
+                "EMAIL_NOT_VERIFIED"      => Unauthorized(new { message = result.Message, errorCode = result.ErrorCode }),
+                "LOCKED"                  => Unauthorized(new { message = result.Message, errorCode = result.ErrorCode }),
+                "DISABLED"                => Unauthorized(new { message = result.Message, errorCode = result.ErrorCode }),
                 _                         => Unauthorized(new { message = result.Message })
             };
+        }
+
+        // MFA requis — retourner le pending token au SSO (HTTP 200)
+        if (result.ErrorCode == "MFA_REQUIRED")
+        {
+            return Ok(new
+            {
+                mfaRequired     = true,
+                mfaPendingToken = result.AccessToken,
+                message         = result.Message
+            });
         }
 
         return Ok(new { authorizationCode = result.Code, redirectUri = result.RedirectUri });
     }
 
-    // ── 4. Refresh Token ───────────────────────────────────────────────────
+    // Refresh Token
+
     [HttpPost("refresh")]
     public async Task<IActionResult> Refresh()
     {
-        // Lire le refresh token depuis le cookie HttpOnly (pas depuis le body)
         var refreshTokenFromCookie = GetRefreshTokenFromCookie();
 
         if (string.IsNullOrEmpty(refreshTokenFromCookie))
@@ -134,9 +158,7 @@ public class AuthController : ControllerBase
 
         var ip     = HttpContext.Connection.RemoteIpAddress?.ToString() ?? "";
         var result = await _mediator.Send(
-            new RefreshTokenCommand(
-                new RefreshRequest { RefreshToken = refreshTokenFromCookie },
-                ip));
+            new RefreshTokenCommand(new RefreshRequest { RefreshToken = refreshTokenFromCookie }, ip));
 
         if (!result.Success)
         {
@@ -144,19 +166,14 @@ public class AuthController : ControllerBase
             return Unauthorized(new { message = result.Message });
         }
 
-        // Nouveau refresh token → Cookie HttpOnly
         if (result.RefreshToken != null)
             SetRefreshTokenCookie(result.RefreshToken);
 
-        return Ok(new
-        {
-            accessToken = result.AccessToken,
-            expiresIn   = 900,
-            tokenType   = "Bearer"
-        });
+        return Ok(new { accessToken = result.AccessToken, expiresIn = 900, tokenType = "Bearer" });
     }
 
-    // ── 5. Logout ──────────────────────────────────────────────────────────
+    // Logout
+
     [HttpPost("logout")]
     [Authorize]
     public async Task<IActionResult> Logout()
@@ -167,28 +184,22 @@ public class AuthController : ControllerBase
 
         var jti        = User.FindFirstValue(JwtRegisteredClaimNames.Jti) ?? "";
         var expClaim   = User.FindFirstValue(JwtRegisteredClaimNames.Exp) ?? "0";
-        var expiration = DateTimeOffset
-            .FromUnixTimeSeconds(long.Parse(expClaim))
-            .UtcDateTime;
+        var expiration = DateTimeOffset.FromUnixTimeSeconds(long.Parse(expClaim)).UtcDateTime;
 
-        // Lire le refresh token depuis le cookie pour le révoquer
         var refreshTokenFromCookie = GetRefreshTokenFromCookie();
 
         var result = await _mediator.Send(new LogoutCommand(
             refreshTokenFromCookie != null
                 ? new LogoutRequest { RefreshToken = refreshTokenFromCookie }
                 : null,
-            userId,
-            jti,
-            expiration));
+            userId, jti, expiration));
 
-        // Supprimer le cookie refresh token
         DeleteRefreshTokenCookie();
-
         return Ok(new { message = result.Message });
     }
 
-    // ── 6. UserInfo (OpenID Connect) ───────────────────────────────────────
+    // UserInfo (OpenID Connect)
+
     [HttpGet("userinfo")]
     [Authorize]
     public async Task<IActionResult> UserInfo()
@@ -210,18 +221,20 @@ public class AuthController : ControllerBase
                 roles               = result.Roles,
                 statut              = result.Statut,
                 email_verified      = true,
-                pwd_change_required = result.DoitChangerMotDePasse
+                pwd_change_required = result.DoitChangerMotDePasse,
+                mfa_enabled         = result.MfaEnabled
             })
             : NotFound(new { message = "Utilisateur introuvable." });
     }
 
-    // ── 7. Authorize (OAuth2 step 1) ───────────────────────────────────────
+    // Authorize (OAuth2 step 1)
+
     [HttpGet("authorize")]
     public async Task<IActionResult> Authorize(
-        [FromQuery] string client_id,
-        [FromQuery] string redirect_uri,
-        [FromQuery] string response_type,
-        [FromQuery] string scope,
+        [FromQuery] string  client_id,
+        [FromQuery] string  redirect_uri,
+        [FromQuery] string  response_type,
+        [FromQuery] string  scope,
         [FromQuery] string? state,
         [FromQuery] string? code_challenge,
         [FromQuery] string? code_challenge_method)
@@ -230,11 +243,12 @@ public class AuthController : ControllerBase
             new AuthorizeQuery(client_id, redirect_uri, response_type, scope, state, code_challenge, code_challenge_method));
 
         return result.Success
-            ? Ok(new { message = "Paramètres valides. Redirigez l'utilisateur vers la page de login.", loginUrl = result.LoginUrl })
+            ? Ok(new { message = "Paramètres valides.", loginUrl = result.LoginUrl })
             : BadRequest(new { error = result.ErrorMessage });
     }
-    
-    // ── 8. Token (exchange code → access token) ────────────────────────────
+
+    // Token (exchange code → access token)
+
     [HttpPost("token")]
     public async Task<IActionResult> Token([FromBody] TokenRequest request)
     {
@@ -243,7 +257,6 @@ public class AuthController : ControllerBase
         if (!result.Success)
             return BadRequest(new { error = result.ErrorCode, error_description = result.ErrorDescription });
 
-        // Refresh Token → Cookie HttpOnly
         if (result.RefreshToken != null)
             SetRefreshTokenCookie(result.RefreshToken);
 
@@ -253,7 +266,134 @@ public class AuthController : ControllerBase
             token_type   = result.TokenType,
             expires_in   = result.ExpiresIn,
             scope        = result.Scope
-            // refresh_token supprimé du body — maintenant dans le cookie
         });
+    }
+
+    // MFA Setup
+
+    [HttpPost("mfa/setup")]
+    [Authorize]
+    public async Task<IActionResult> MfaSetup()
+    {
+        var userIdStr = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (!Guid.TryParse(userIdStr, out var userId))
+            return Unauthorized();
+
+        var result = await _mediator.Send(new SetupMfaCommand(userId));
+
+        if (!result.Success)
+            return BadRequest(new { message = result.Message });
+
+        string qrCodeBase64;
+        try
+        {
+            using var qrGenerator = new QRCodeGenerator();
+            using var qrData      = qrGenerator.CreateQrCode(result.OtpAuthUri!, QRCodeGenerator.ECCLevel.M);
+            using var qrCode      = new PngByteQRCode(qrData);
+            var pngBytes          = qrCode.GetGraphic(5);
+            qrCodeBase64 = "data:image/png;base64," + Convert.ToBase64String(pngBytes);
+        }
+        catch
+        {
+            qrCodeBase64 = result.OtpAuthUri!;
+        }
+
+        return Ok(new
+        {
+            message      = result.Message,
+            otpAuthUri   = result.OtpAuthUri,
+            qrCodeBase64 = qrCodeBase64,
+            manualSecret = result.ManualSecret
+        });
+    }
+
+    // MFA Verify Setup
+
+    [HttpPost("mfa/verify-setup")]
+    [Authorize]
+    public async Task<IActionResult> MfaVerifySetup([FromBody] MfaCodeRequest request)
+    {
+        var userIdStr = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (!Guid.TryParse(userIdStr, out var userId))
+            return Unauthorized();
+
+        var result = await _mediator.Send(new VerifyMfaSetupCommand(userId, request.Code));
+
+        return result.Success
+            ? Ok(new { message = result.Message })
+            : BadRequest(new { message = result.Message });
+    }
+
+    // MFA Verify (login step 2) — génère un authorizationCode OAuth2
+
+    [HttpPost("mfa/verify")]
+    public async Task<IActionResult> MfaVerify([FromBody] MfaVerifyRequest request)
+    {
+        if (string.IsNullOrEmpty(request.MfaPendingToken) || string.IsNullOrEmpty(request.Code))
+            return BadRequest(new { message = "mfaPendingToken et code sont requis." });
+
+        var ip        = HttpContext.Connection.RemoteIpAddress?.ToString() ?? "";
+        var userAgent = Request.Headers["User-Agent"].ToString();
+
+        var result = await _mediator.Send(new VerifyMfaLoginCommand(
+            request.MfaPendingToken,
+            request.Code,
+            ip,
+            userAgent,
+            request.ClientId,
+            request.RedirectUri,
+            request.State,
+            request.CodeChallenge,
+            request.CodeChallengeMethod,
+            request.Scopes));
+
+        if (!result.Success)
+            return Unauthorized(new { message = result.Message });
+
+        return Ok(new { redirectUri = result.RedirectUri });
+    }
+
+    // MFA Disable
+
+    [HttpPost("mfa/disable")]
+    [Authorize]
+    public async Task<IActionResult> MfaDisable([FromBody] MfaCodeRequest request)
+    {
+        var userIdStr = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (!Guid.TryParse(userIdStr, out var userId))
+            return Unauthorized();
+
+        var result = await _mediator.Send(new DisableMfaCommand(userId, request.Code));
+
+        return result.Success
+            ? Ok(new { message = result.Message })
+            : BadRequest(new { message = result.Message });
+    }
+
+    // Confirm Email
+
+    [HttpGet("confirm-email")]
+    public async Task<IActionResult> ConfirmEmail([FromQuery] string token)
+    {
+        if (string.IsNullOrWhiteSpace(token))
+            return BadRequest(new { message = "Token manquant." });
+
+        var result = await _mediator.Send(new ConfirmEmailCommand(token));
+
+        return result.Success
+            ? Ok(new { message = result.Message })
+            : BadRequest(new { message = result.Message });
+    }
+
+    // Resend Confirmation Email
+
+    [HttpPost("resend-confirmation")]
+    public async Task<IActionResult> ResendConfirmation([FromBody] ResendConfirmationRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request.Email))
+            return BadRequest(new { message = "Email requis." });
+
+        var result = await _mediator.Send(new RenvoyerConfirmationEmailCommand(request.Email));
+        return Ok(new { message = result.Message });
     }
 }
