@@ -15,6 +15,7 @@ namespace Domain.Queries.Auth
         public List<string> Roles { get; set; } = new();
         public string? Statut { get; set; }
         public bool DoitChangerMotDePasse { get; set; }
+        public bool MfaEnabled { get; set; }
     }
 
     // ── Authorize step 1 (validation paramètres OAuth2) ───────────────────

@@ -40,6 +40,7 @@ builder.Services.AddCors(options =>
     {
         policy
             .WithOrigins(
+                "http://localhost:4200",
                 "http://localhost:3001",
                 "http://localhost:3002",
                 "http://localhost:3003")

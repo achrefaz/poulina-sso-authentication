@@ -457,6 +457,19 @@ namespace Domain.Handlers.Auth
                 return new LoginWithCodeResult { Success = false, Message = "Email ou mot de passe incorrect." };
             }
 
+            // Email non vérifié
+            if (!user.EmailVerifie)
+            {
+                await LogAuditAsync(user.Id, "LOGIN_EMAIL_NOT_VERIFIED", "AUTH", false, cmd.IpAddress, cmd.UserAgent);
+                return new LoginWithCodeResult
+                {
+                    Success   = false,
+                    ErrorCode = "EMAIL_NOT_VERIFIED",
+                    Message   = "Votre email n'est pas encore confirmé. Vérifiez votre boîte mail ou demandez un nouveau lien."
+                };
+            }
+
+            // Vérification client OAuth2
             var client = await _repo.GetClientByClientIdAsync(req.ClientId, ct);
 
             if (client == null)
@@ -486,7 +499,27 @@ namespace Domain.Handlers.Auth
 
             user.TentativesConnexionEchouees = 0;
             user.DateVerrouillage            = null;
-            user.DateDerniereConnexion       = DateTime.UtcNow;
+
+            // ── Fork MFA ─────────────────────────────────────────────────────
+            if (user.TypeMFA == TypeMFA.TOTP && user.MFAValidee && !string.IsNullOrEmpty(user.SecretMFA))
+            {
+                var mfaPendingToken = GenerateMfaPendingToken(user.Id);
+
+                await _repo.SaveChangesAsync(ct);
+                await LogAuditAsync(user.Id, "LOGIN_MFA_REQUIRED", "AUTH", true, cmd.IpAddress, cmd.UserAgent,
+                    "Code TOTP requis pour finaliser la connexion");
+
+                return new LoginWithCodeResult
+                {
+                    Success     = true,
+                    ErrorCode   = "MFA_REQUIRED",
+                    AccessToken = mfaPendingToken,
+                    Message     = "Code TOTP requis pour finaliser la connexion."
+                };
+            }
+            // ─────────────────────────────────────────────────────────────────
+
+            user.DateDerniereConnexion = DateTime.UtcNow;
 
             await _repo.AddSessionAsync(new Session
             {
@@ -655,7 +688,8 @@ namespace Domain.Handlers.Auth
                 Prenom                = user.Prenom,
                 Statut                = user.Statut.ToString(),
                 DoitChangerMotDePasse = user.DoitChangerMotDePasse,
-                Roles                 = user.UtilisateurRoles.Select(ur => ur.Role.Nom).ToList()
+                Roles                 = user.UtilisateurRoles.Select(ur => ur.Role.Nom).ToList(),
+                MfaEnabled            = user.MFAValidee
             };
         }
     }
@@ -857,7 +891,7 @@ namespace Domain.Handlers.Auth
 
         public async Task<VerifyMfaLoginResult> Handle(VerifyMfaLoginCommand cmd, CancellationToken ct)
         {
-            //  Valider le MfaPendingToken 
+            // Valider le MfaPendingToken
             Guid userId;
             try
             {
@@ -873,7 +907,7 @@ namespace Domain.Handlers.Auth
                 };
             }
 
-            //  Charger l'utilisateur 
+            // Charger l'utilisateur
             var user = await _repo.GetUtilisateurByIdAsync(userId, ct);
             if (user is null || !user.MFAValidee || string.IsNullOrEmpty(user.SecretMFA))
                 return new VerifyMfaLoginResult { Success = false, Message = "Utilisateur introuvable ou MFA non configuré." };
@@ -881,13 +915,11 @@ namespace Domain.Handlers.Auth
             if (user.Statut == StatutUtilisateur.BLOQUE || user.Statut == StatutUtilisateur.DESACTIVE)
                 return new VerifyMfaLoginResult { Success = false, Message = "Compte inactif." };
 
-            //  Vérifier le code TOTP
+            // Vérifier le code TOTP
             if (!ValidateTotp(user.SecretMFA, cmd.Code))
             {
-                await LogAuditAsync(userId, "MFA_VERIFY_FAILED", "AUTH", false, cmd.IpAddress, cmd.UserAgent,
-                    "Code TOTP incorrect");
+                await LogAuditAsync(userId, "MFA_VERIFY_FAILED", "AUTH", false, cmd.IpAddress, cmd.UserAgent, "Code TOTP incorrect");
                 await _repo.SaveChangesAsync(ct);
-
                 return new VerifyMfaLoginResult
                 {
                     Success   = false,
@@ -896,7 +928,7 @@ namespace Domain.Handlers.Auth
                 };
             }
 
-            //  Créer la session 
+            // Créer la session
             user.DateDerniereConnexion       = DateTime.UtcNow;
             user.TentativesConnexionEchouees = 0;
 
@@ -914,26 +946,36 @@ namespace Domain.Handlers.Auth
                 DeviceInfo           = "mfa-login"
             });
 
-            //  Émettre les tokens finaux 
-            var defaultClient = await _repo.GetFirstClientAsync(ct);
-            if (defaultClient == null)
-                return new VerifyMfaLoginResult { Success = false, Message = "Aucune application cliente configurée." };
+            // Récupérer le client OAuth2
+            var client = await _repo.GetClientByClientIdAsync(cmd.ClientId, ct);
+            if (client == null)
+                return new VerifyMfaLoginResult { Success = false, Message = "Client OAuth2 introuvable." };
 
-            var roles              = user.UtilisateurRoles.Where(ur => ur.Actif).Select(ur => ur.Role.Nom).ToList();
-            var (accessToken, _)   = GenerateJwtToken(user, roles);
-            var refreshToken       = await CreateRefreshTokenAsync(user.Id, defaultClient.Id, cmd.IpAddress);
+            // Générer un authorizationCode OAuth2 (même flow que LoginWithCode)
+            var rawCode = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
+            await _repo.AddAuthorizationCodeAsync(new AuthorizationCode
+            {
+                Id                  = Guid.NewGuid(),
+                CodeHash            = HashToken(rawCode),
+                UtilisateurId       = user.Id,
+                ClientId            = client.Id,
+                DateCreation        = DateTime.UtcNow,
+                DateExpiration      = DateTime.UtcNow.AddMinutes(5),
+                EstUtilise          = false,
+                CodeChallenge       = cmd.CodeChallenge,
+                CodeChallengeMethod = cmd.CodeChallengeMethod,
+                Scopes              = cmd.Scopes
+            });
 
             await _repo.SaveChangesAsync(ct);
-            await LogAuditAsync(userId, "LOGIN_MFA_SUCCESS", "AUTH", true, cmd.IpAddress, cmd.UserAgent,
-                "Connexion MFA réussie");
+            await LogAuditAsync(userId, "LOGIN_MFA_SUCCESS", "AUTH", true, cmd.IpAddress, cmd.UserAgent, "Connexion MFA réussie");
 
             return new VerifyMfaLoginResult
             {
-                Success               = true,
-                AccessToken           = accessToken,
-                RefreshToken          = refreshToken,
-                DoitChangerMotDePasse = user.DoitChangerMotDePasse,
-                UserId                = userId
+                Success     = true,
+                Code        = rawCode,
+                RedirectUri = $"{cmd.RedirectUri}?code={rawCode}&state={cmd.State}",
+                Message     = "MFA validé."
             };
         }
     }

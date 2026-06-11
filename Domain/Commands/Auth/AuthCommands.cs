@@ -2,9 +2,7 @@
 
 namespace Domain.Commands.Auth
 {
-    
     // DTOs — Requêtes entrantes (owned by Domain, not by API layer)
-    
 
     public class RegisterRequest
     {
@@ -53,22 +51,31 @@ namespace Domain.Commands.Auth
 
     // ── DTOs MFA ──────────────────────────────────────────────────────────────
 
-    
     public class MfaCodeRequest
     {
         public string Code { get; set; } = string.Empty;
     }
 
-   
     public class MfaVerifyRequest
     {
-        public string MfaPendingToken { get; set; } = string.Empty;
-        public string Code            { get; set; } = string.Empty;
+        public string  MfaPendingToken     { get; set; } = string.Empty;
+        public string  Code                { get; set; } = string.Empty;
+        // Paramètres OAuth2 pour générer le code après validation TOTP
+        public string  ClientId            { get; set; } = string.Empty;
+        public string  RedirectUri         { get; set; } = string.Empty;
+        public string? State               { get; set; }
+        public string? CodeChallenge       { get; set; }
+        public string? CodeChallengeMethod { get; set; }
+        public string? Scopes              { get; set; }
     }
 
-    
+    // ── Resend confirmation email ─────────────────────────────────────────────
+    public class ResendConfirmationRequest
+    {
+        public string Email { get; set; } = string.Empty;
+    }
+
     // Register
-    
 
     public record RegisterCommand(RegisterRequest Request) : IRequest<RegisterResult>;
 
@@ -79,9 +86,7 @@ namespace Domain.Commands.Auth
         public Guid?   UserId  { get; set; }
     }
 
-    
-    //  Login direct
-    
+    // Login direct
 
     public record LoginCommand(
         LoginRequest Request,
@@ -96,15 +101,12 @@ namespace Domain.Commands.Auth
         public string? AccessToken           { get; set; }
         public string? RefreshToken          { get; set; }
         public bool    DoitChangerMotDePasse { get; set; }
-        
         public string? ErrorCode             { get; set; }
         public string? Raison                { get; set; }
         public Guid?   UserId                { get; set; }
     }
 
-    
-    //  Login with code (OAuth2 Authorization Code Flow)
-    
+    // Login with code (OAuth2 Authorization Code Flow)
 
     public record LoginWithCodeCommand(
         LoginWithCodeRequest Request,
@@ -119,11 +121,10 @@ namespace Domain.Commands.Auth
         public string? Code        { get; set; }
         public string? RedirectUri { get; set; }
         public string? ErrorCode   { get; set; }
+        public string? AccessToken { get; set; }
     }
 
-    
-    //  Refresh Token
-    
+    // Refresh Token
 
     public record RefreshTokenCommand(
         RefreshRequest Request,
@@ -138,9 +139,7 @@ namespace Domain.Commands.Auth
         public string? RefreshToken { get; set; }
     }
 
-    
-    //  Logout
-    
+    // Logout
 
     public record LogoutCommand(
         LogoutRequest? Request,
@@ -155,9 +154,7 @@ namespace Domain.Commands.Auth
         public string? Message { get; set; }
     }
 
-    
-    //  Exchange code → token
-    
+    // Exchange code → token
 
     public record ExchangeCodeCommand(TokenRequest Request) : IRequest<ExchangeCodeResult>;
 
@@ -173,9 +170,7 @@ namespace Domain.Commands.Auth
         public string? Scope            { get; set; }
     }
 
-    
-    //  MFA — Setup (générer secret TOTP + QR code)
-    
+    // MFA — Setup
 
     public record SetupMfaCommand(Guid UserId) : IRequest<SetupMfaResult>;
 
@@ -183,17 +178,12 @@ namespace Domain.Commands.Auth
     {
         public bool    Success      { get; set; }
         public string? Message      { get; set; }
-       
         public string? OtpAuthUri   { get; set; }
-       
         public string? QrCodeUrl    { get; set; }
-        
         public string? ManualSecret { get; set; }
     }
 
-    
-    //  MFA — Verify Setup (activer définitivement le MFA)
-    
+    // MFA — Verify Setup
 
     public record VerifyMfaSetupCommand(Guid UserId, string Code) : IRequest<VerifyMfaSetupResult>;
 
@@ -203,15 +193,19 @@ namespace Domain.Commands.Auth
         public string? Message { get; set; }
     }
 
-    
-    //  MFA — Verify Login (step 2 : valider le code TOTP après login)
-    
+    // MFA — Verify Login
 
     public record VerifyMfaLoginCommand(
-        string MfaPendingToken,
-        string Code,
-        string IpAddress,
-        string UserAgent
+        string  MfaPendingToken,
+        string  Code,
+        string  IpAddress,
+        string  UserAgent,
+        string  ClientId,
+        string  RedirectUri,
+        string? State,
+        string? CodeChallenge,
+        string? CodeChallengeMethod,
+        string? Scopes
     ) : IRequest<VerifyMfaLoginResult>;
 
     public class VerifyMfaLoginResult
@@ -219,15 +213,16 @@ namespace Domain.Commands.Auth
         public bool    Success               { get; set; }
         public string? Message               { get; set; }
         public string? ErrorCode             { get; set; }
+        public string? Code                  { get; set; }
+        public string? RedirectUri           { get; set; }
+        // Conservés pour compatibilité
         public string? AccessToken           { get; set; }
         public string? RefreshToken          { get; set; }
         public bool    DoitChangerMotDePasse { get; set; }
         public Guid?   UserId                { get; set; }
     }
 
-    
-    //  MFA — Disable (désactiver le MFA après confirmation du code)
-    
+    // MFA — Disable
 
     public record DisableMfaCommand(Guid UserId, string Code) : IRequest<DisableMfaResult>;
 
@@ -237,9 +232,3 @@ namespace Domain.Commands.Auth
         public string? Message { get; set; }
     }
 }
-
-    // ── Resend confirmation email ─────────────────────────────────────────────
-    public class ResendConfirmationRequest
-    {
-        public string Email { get; set; } = string.Empty;
-    }
