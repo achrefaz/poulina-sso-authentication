@@ -519,6 +519,29 @@ namespace Domain.Handlers.Auth
             }
             // ─────────────────────────────────────────────────────────────────
 
+            // ── Fork changement de mot de passe obligatoire ───────────────────
+            // L'admin a créé ce compte avec DoitChangerMotDePasse = true.
+            // On émet un access token court (pas de refresh token) pour que
+            // le SSO puisse appeler /api/User/change-password de façon authentifiée.
+            if (user.DoitChangerMotDePasse)
+            {
+                var roles              = user.UtilisateurRoles.Where(ur => ur.Actif).Select(ur => ur.Role.Nom).ToList();
+                var (tempToken, _)     = GenerateJwtToken(user, roles);
+
+                await _repo.SaveChangesAsync(ct);
+                await LogAuditAsync(user.Id, "LOGIN_PWD_CHANGE_REQUIRED", "AUTH", true, cmd.IpAddress, cmd.UserAgent,
+                    "Changement de mot de passe obligatoire");
+
+                return new LoginWithCodeResult
+                {
+                    Success     = true,
+                    ErrorCode   = "PWD_CHANGE_REQUIRED",
+                    AccessToken = tempToken,
+                    Message     = "Vous devez changer votre mot de passe avant de continuer."
+                };
+            }
+            // ─────────────────────────────────────────────────────────────────
+
             user.DateDerniereConnexion = DateTime.UtcNow;
 
             await _repo.AddSessionAsync(new Session
@@ -542,7 +565,9 @@ namespace Domain.Handlers.Auth
                 _       => req.CodeChallenge
             };
 
-            var rawCode = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
+            var rawCode = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32))
+                .Replace("+", "-").Replace("/", "_").TrimEnd('=');
+
             await _repo.AddAuthorizationCodeAsync(new AuthorizationCode
             {
                 Id                  = Guid.NewGuid(),
@@ -564,7 +589,7 @@ namespace Domain.Handlers.Auth
             {
                 Success     = true,
                 Code        = rawCode,
-                RedirectUri = $"{req.RedirectUri}?code={rawCode}&state={req.State}"
+                RedirectUri = $"{req.RedirectUri}?code={Uri.EscapeDataString(rawCode)}&state={Uri.EscapeDataString(req.State ?? "")}"
             };
         }
     }
@@ -600,6 +625,37 @@ namespace Domain.Handlers.Auth
             var user = entity.Utilisateur;
             if (user.Statut == StatutUtilisateur.BLOQUE || user.Statut == StatutUtilisateur.DESACTIVE)
                 return new RefreshResult { Success = false, Message = "Compte inactif." };
+
+            // ── Vérification des rôles autorisés pour le client demandeur ────
+            // On utilise le clientId envoyé par le frontend (l'app qui demande
+            // le refresh), pas celui du refresh token (qui peut être d'une autre app).
+            var targetClientId = cmd.Request.ClientId;
+            if (!string.IsNullOrEmpty(targetClientId))
+            {
+                var targetClient = await _repo.GetClientByClientIdAsync(targetClientId, ct);
+                if (targetClient == null)
+                    return new RefreshResult { Success = false, Message = "Client inconnu." };
+
+                if (!string.IsNullOrEmpty(targetClient.AllowedRoles))
+                {
+                    var allowedRoles = targetClient.AllowedRoles
+                        .Split(',', StringSplitOptions.RemoveEmptyEntries)
+                        .Select(r => r.Trim())
+                        .ToList();
+                    var userRoles = user.UtilisateurRoles
+                        .Where(ur => ur.Actif)
+                        .Select(ur => ur.Role.Nom)
+                        .ToList();
+
+                    if (!userRoles.Any(r => allowedRoles.Contains(r)))
+                    {
+                        await LogAuditAsync(user.Id, "REFRESH_ACCESS_DENIED", "AUTH", false, cmd.IpAddress, "",
+                            $"Rôle insuffisant pour {targetClient.Nom}. User: [{string.Join(", ", userRoles)}]");
+                        return new RefreshResult { Success = false, Message = "Accès refusé : rôle insuffisant pour cette application." };
+                    }
+                }
+            }
+            // ─────────────────────────────────────────────────────────────────
 
             entity.EstUtilise      = true;
             entity.DateRevoquation = DateTime.UtcNow;
@@ -751,6 +807,28 @@ namespace Domain.Handlers.Auth
                 return new ExchangeCodeResult { Success = false, ErrorCode = "invalid_grant", ErrorDescription = "Code expiré." };
             if (authCode.Client.ClientId != req.ClientId)
                 return new ExchangeCodeResult { Success = false, ErrorCode = "invalid_client" };
+
+            // ── Vérification des rôles autorisés pour ce client ───────────────
+            if (!string.IsNullOrEmpty(authCode.Client.AllowedRoles))
+            {
+                var allowedRoles = authCode.Client.AllowedRoles
+                    .Split(',', StringSplitOptions.RemoveEmptyEntries)
+                    .Select(r => r.Trim())
+                    .ToList();
+                var userRoles = authCode.Utilisateur.UtilisateurRoles
+                    .Where(ur => ur.Actif)
+                    .Select(ur => ur.Role.Nom)
+                    .ToList();
+
+                if (!userRoles.Any(r => allowedRoles.Contains(r)))
+                    return new ExchangeCodeResult
+                    {
+                        Success          = false,
+                        ErrorCode        = "access_denied",
+                        ErrorDescription = $"Accès refusé : rôle insuffisant pour {authCode.Client.Nom}."
+                    };
+            }
+            // ─────────────────────────────────────────────────────────────────
 
             if (!string.IsNullOrEmpty(authCode.CodeChallenge))
             {
@@ -952,7 +1030,9 @@ namespace Domain.Handlers.Auth
                 return new VerifyMfaLoginResult { Success = false, Message = "Client OAuth2 introuvable." };
 
             // Générer un authorizationCode OAuth2 (même flow que LoginWithCode)
-            var rawCode = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
+            var rawCode = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32))
+                .Replace("+", "-").Replace("/", "_").TrimEnd('=');
+
             await _repo.AddAuthorizationCodeAsync(new AuthorizationCode
             {
                 Id                  = Guid.NewGuid(),
@@ -974,7 +1054,7 @@ namespace Domain.Handlers.Auth
             {
                 Success     = true,
                 Code        = rawCode,
-                RedirectUri = $"{cmd.RedirectUri}?code={rawCode}&state={cmd.State}",
+                RedirectUri = $"{cmd.RedirectUri}?code={Uri.EscapeDataString(rawCode)}&state={Uri.EscapeDataString(cmd.State ?? "")}",
                 Message     = "MFA validé."
             };
         }

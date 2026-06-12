@@ -32,7 +32,13 @@ namespace Domain.Commands.Auth
 
     public class RefreshRequest
     {
-        public string RefreshToken { get; set; } = string.Empty;
+        public string  RefreshToken { get; set; } = string.Empty;
+        /// <summary>
+        /// ClientId de l'app qui demande le refresh.
+        /// Permet de vérifier que l'utilisateur a bien le rôle
+        /// autorisé pour cette application spécifique.
+        /// </summary>
+        public string? ClientId     { get; set; }
     }
 
     public class LogoutRequest

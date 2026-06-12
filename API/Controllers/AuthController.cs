@@ -143,6 +143,17 @@ public class AuthController : ControllerBase
             });
         }
 
+        // Changement de mot de passe obligatoire — retourner un token temporaire
+        if (result.ErrorCode == "PWD_CHANGE_REQUIRED")
+        {
+            return Ok(new
+            {
+                passwordChangeRequired = true,
+                accessToken            = result.AccessToken,
+                message                = result.Message
+            });
+        }
+
         return Ok(new { authorizationCode = result.Code, redirectUri = result.RedirectUri });
     }
 
