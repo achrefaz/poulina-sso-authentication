@@ -1,6 +1,7 @@
 ﻿using Domain.Interfaces;
 using Domain.Models;
 using Domain.Models.Enums;
+using Domain.Queries.Users;
 using Data.Context;
 using Microsoft.EntityFrameworkCore;
 
@@ -90,6 +91,40 @@ namespace Data.Repositories
                 .Where(s => s.UtilisateurId == userId && s.Statut == StatutSession.ACTIVE)
                 .ToListAsync(ct);
 
+        public Task<Session?> GetSessionByIdAsync(Guid id, CancellationToken ct = default)
+            => _context.Sessions.FirstOrDefaultAsync(s => s.Id == id, ct);
+
+        public async Task<(List<SessionDto> Items, int Total)> GetAllSessionsPagedAsync(
+            int page,
+            int pageSize,
+            CancellationToken ct = default)
+        {
+            var query = _context.Sessions
+                .Include(s => s.Utilisateur)
+                .AsQueryable();
+
+            var total = await query.CountAsync(ct);
+
+            var items = await query
+                .OrderByDescending(s => s.DateCreation)
+                .Skip((page - 1) * pageSize)
+                .Take(pageSize)
+                .Select(s => new SessionDto
+                {
+                    Id                   = s.Id,
+                    SessionId            = s.SessionId,
+                    Email                = s.Utilisateur != null ? s.Utilisateur.Email : null,
+                    IpAddress            = s.IpAddress,
+                    UserAgent            = s.UserAgent,
+                    DateCreation         = s.DateCreation,
+                    DateDerniereActivite = s.DateDerniereActivite,
+                    Statut               = s.Statut.ToString()
+                })
+                .ToListAsync(ct);
+
+            return (items, total);
+        }
+
         // ── JWT Blacklist ─────────────────────────────────────────────────────
 
         public async Task RevokeJwtAsync(string jti, DateTime expiration, CancellationToken ct = default)
@@ -128,6 +163,51 @@ namespace Data.Repositories
             string tokenHash, CancellationToken ct = default)
             => _context.Utilisateurs
                 .FirstOrDefaultAsync(u => u.TokenVerificationEmail == tokenHash, ct);
+
+        // ── Audit Logs ────────────────────────────────────────────────────────
+
+        public async Task<(List<AuditLogDto> Items, int Total)> GetAuditLogsAsync(
+            int       page,
+            int       pageSize,
+            string?   actionFilter = null,
+            DateTime? dateDebut    = null,
+            DateTime? dateFin      = null,
+            CancellationToken ct   = default)
+        {
+            var query = _context.AuditLogs
+                .Include(a => a.Utilisateur)
+                .AsQueryable();
+
+            if (!string.IsNullOrEmpty(actionFilter))
+                query = query.Where(a => a.Action == actionFilter);
+
+            if (dateDebut.HasValue)
+                query = query.Where(a => a.DateHeure >= dateDebut.Value);
+
+            if (dateFin.HasValue)
+                query = query.Where(a => a.DateHeure < dateFin.Value);
+
+            var total = await query.CountAsync(ct);
+
+            var items = await query
+                .OrderByDescending(a => a.DateHeure)
+                .Skip((page - 1) * pageSize)
+                .Take(pageSize)
+                .Select(a => new AuditLogDto
+                {
+                    Id            = a.Id,
+                    Email         = a.Utilisateur != null ? a.Utilisateur.Email : null,
+                    Action        = a.Action,
+                    Categorie     = a.Categorie,
+                    IpAddress     = a.IpAddress,
+                    DateHeure     = a.DateHeure,
+                    Succes        = a.Succes,
+                    MessageErreur = a.MessageErreur
+                })
+                .ToListAsync(ct);
+
+            return (items, total);
+        }
 
         // ── Persistance ───────────────────────────────────────────────────────
 

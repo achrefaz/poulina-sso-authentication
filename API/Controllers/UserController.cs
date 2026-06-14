@@ -439,6 +439,127 @@ public class UserController : ControllerBase
         return Ok(clients);
     }
 
+    // ── Admin : Audit Logs ─────────────────────────────────────────────────
+
+    [HttpGet("admin/audit-logs")]
+    [Authorize(Roles = "ADMIN")]
+    public async Task<IActionResult> GetAuditLogs(
+        [FromQuery] int     page      = 1,
+        [FromQuery] int     pageSize  = 20,
+        [FromQuery] string? action    = null,
+        [FromQuery] string? dateDebut = null,
+        [FromQuery] string? dateFin   = null)
+    {
+        var query = _context.AuditLogs
+            .Include(a => a.Utilisateur)
+            .AsQueryable();
+
+        if (!string.IsNullOrEmpty(action))
+            query = query.Where(a => a.Action == action);
+
+        if (!string.IsNullOrEmpty(dateDebut) && DateTime.TryParse(dateDebut, out var dDebut))
+            query = query.Where(a => a.DateHeure >= dDebut);
+
+        if (!string.IsNullOrEmpty(dateFin) && DateTime.TryParse(dateFin, out var dFin))
+            query = query.Where(a => a.DateHeure < dFin.AddDays(1));
+
+        var total = await query.CountAsync();
+
+        var items = await query
+            .OrderByDescending(a => a.DateHeure)
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
+            .Select(a => new
+            {
+                a.Id,
+                Email         = a.Utilisateur != null ? a.Utilisateur.Email : null,
+                a.Action,
+                a.Categorie,
+                a.IpAddress,
+                a.DateHeure,
+                a.Succes,
+                a.MessageErreur
+            })
+            .ToListAsync();
+
+        return Ok(new
+        {
+            items,
+            total,
+            page,
+            pageSize,
+            totalPages = (int)Math.Ceiling((double)total / pageSize)
+        });
+    }
+
+    // ── Admin : Sessions ───────────────────────────────────────────────────
+
+    [HttpGet("admin/sessions")]
+    [Authorize(Roles = "ADMIN")]
+    public async Task<IActionResult> GetSessions(
+        [FromQuery] int page     = 1,
+        [FromQuery] int pageSize = 20)
+    {
+        var total = await _context.Sessions.CountAsync();
+
+        var items = await _context.Sessions
+            .Include(s => s.Utilisateur)
+            .OrderByDescending(s => s.DateCreation)
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
+            .Select(s => new
+            {
+                s.Id,
+                s.SessionId,
+                Email                = s.Utilisateur != null ? s.Utilisateur.Email : null,
+                s.IpAddress,
+                s.UserAgent,
+                s.DateCreation,
+                s.DateDerniereActivite,
+                Statut = s.Statut.ToString()
+            })
+            .ToListAsync();
+
+        return Ok(new
+        {
+            items,
+            total,
+            page,
+            pageSize,
+            totalPages = (int)Math.Ceiling((double)total / pageSize)
+        });
+    }
+
+    [HttpPatch("admin/sessions/{id}/revoquer")]
+    [Authorize(Roles = "ADMIN")]
+    public async Task<IActionResult> RevoquerSession(Guid id)
+    {
+        var adminId = GetCurrentUserId();
+        if (adminId == null) return Unauthorized();
+
+        var session = await _context.Sessions
+            .Include(s => s.Utilisateur)
+            .FirstOrDefaultAsync(s => s.Id == id);
+
+        if (session == null)
+            return NotFound(new { message = "Session introuvable." });
+
+        if (session.Statut != StatutSession.ACTIVE)
+            return BadRequest(new { message = "Cette session n'est pas active." });
+
+        session.Statut = StatutSession.REVOQUEE;
+
+        await _context.SaveChangesAsync();
+        await LogAudit(
+            adminId.Value,
+            "REVOKE_SESSION",
+            "ADMIN",
+            true,
+            $"Session {session.SessionId} révoquée pour {session.Utilisateur?.Email}");
+
+        return Ok(new { message = "Session révoquée avec succès." });
+    }
+
     // ── Helpers ────────────────────────────────────────────────────────────
 
     private Guid? GetCurrentUserId()
