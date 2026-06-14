@@ -147,7 +147,6 @@ public class UserController : ControllerBase
         if (existingUser != null)
             return BadRequest(new { message = "Un utilisateur avec cet email existe déjà." });
 
-        // ── Générer le token de vérification email ────────────────────────
         var (rawToken, tokenHash) = GenererTokenVerification();
 
         var user = new Utilisateur
@@ -191,7 +190,6 @@ public class UserController : ControllerBase
         await _context.SaveChangesAsync();
         await LogAudit(adminId.Value, "CREATE_USER", "ADMIN", true, $"Utilisateur créé: {user.Email}");
 
-        // ── Envoyer l'email de confirmation ───────────────────────────────
         var baseUrl = _configuration["AppSettings:BaseUrl"] ?? "http://localhost:5095";
         var lien    = $"{baseUrl}/api/Auth/confirm-email?token={Uri.EscapeDataString(rawToken)}";
 
