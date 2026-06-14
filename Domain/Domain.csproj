@@ -11,11 +11,9 @@
 		<Folder Include="Commands\Clients\" />
 		<Folder Include="Commands\Users\" />
 		<Folder Include="Handlers\Clients\" />
-		<Folder Include="Handlers\Users\" />
 		<Folder Include="Models\Enums\" />
 		<Folder Include="Validators\" />
 		<Folder Include="Queries\Clients\" />
-		<Folder Include="Queries\Users\" />
 	</ItemGroup>
 
 	<ItemGroup>
