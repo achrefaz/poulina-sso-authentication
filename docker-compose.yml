@@ -1,0 +1,73 @@
+name: poulina-sso
+
+services:
+
+  # SQL Server 2022 
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: poulina-sso-db
+    restart: unless-stopped
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: "${DB_SA_PASSWORD:-Poulina@SSO2024!}"
+      MSSQL_PID: "Developer"        
+    ports:
+      - "1433:1433"                 
+    volumes:
+      - sqlserver_data:/var/opt/mssql
+    healthcheck:
+      test: >
+        /opt/mssql-tools18/bin/sqlcmd
+        -S localhost -U sa -P "${DB_SA_PASSWORD:-Poulina@SSO2024!}"
+        -Q "SELECT 1" -No
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # API .NET
+  api:
+    build:
+      context: .
+      dockerfile: API/Dockerfile
+    image: poulina-sso-api:local
+    container_name: poulina-sso-api
+    restart: unless-stopped
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+    ports:
+      - "5095:8080"                 
+    environment:
+      ASPNETCORE_ENVIRONMENT: "${ASPNETCORE_ENVIRONMENT:-Development}"
+      ConnectionStrings__DefaultConnection: >-
+        Server=sqlserver,1433;
+        Database=PoulinaSSODB;
+        User Id=sa;
+        Password=${DB_SA_PASSWORD:-Poulina@SSO2024!};
+        TrustServerCertificate=True;
+        MultipleActiveResultSets=true
+      JwtSettings__SecretKey:         "${JWT_SECRET:-PoulinaSSO-SuperSecretKey-2024!@#$}"
+      JwtSettings__Issuer:            "${JWT_ISSUER:-http://localhost:5095}"
+      JwtSettings__Audience:          "${JWT_AUDIENCE:-http://localhost:5095}"
+      JwtSettings__ExpirationMinutes: "15"
+      JwtSettings__TokenLifetimeSecondes: "900"
+      AppSettings__BaseUrl:           "${BASE_URL:-http://localhost:5095}"
+      Brevo__SmtpLogin:               "${BREVO_LOGIN}"
+      Brevo__SmtpPassword:            "${BREVO_PASSWORD}"
+      Brevo__ExpéditeurEmail:         "${BREVO_FROM_EMAIL:-noreply@poulina.com}"
+      Brevo__ExpéditeurNom:           "${BREVO_FROM_NAME:-Poulina SSO}"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+volumes:
+  sqlserver_data:
+    name: poulina-sso-sqldata
+
+networks:
+  default:
+    name: poulina-sso-network

@@ -1,7 +1,5 @@
 <Solution>
-  <Folder Name="/.github/">
-    <File Path=".github/workflows/ci.yml" />
-  </Folder>
+  <Folder Name="/.github/" />
   <Project Path="API/API.csproj" />
   <Project Path="Data/Data.csproj" />
   <Project Path="Domain/Domain.csproj" />
