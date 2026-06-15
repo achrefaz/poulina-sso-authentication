@@ -232,6 +232,8 @@ public class LoginHandlerTests
 
     // ── Aucun client configuré ────────────────────────────────────────────────
 
+    
+    
     [Fact]
     public async Task Login_AucunClientConfigure_RetourneEchec()
     {
