@@ -149,13 +149,17 @@ public class UserController : ControllerBase
 
         var (rawToken, tokenHash) = GenererTokenVerification();
 
+        // On conserve le mot de passe en clair AVANT le hachage pour l'envoyer par email.
+        // Il n'est jamais persisté — uniquement utilisé dans cette portée locale.
+        var motDePasseEnClair = request.Password;
+
         var user = new Utilisateur
         {
             Id                          = Guid.NewGuid(),
             Email                       = request.Email.Trim().ToLower(),
             Nom                         = request.Nom,
             Prenom                      = request.Prenom,
-            MotDePasseHash              = _passwordHasher.Hash(request.Password),
+            MotDePasseHash              = _passwordHasher.Hash(motDePasseEnClair),
             Salt                        = string.Empty,
             Statut                      = StatutUtilisateur.ACTIF,
             DateCreation                = DateTime.UtcNow,
@@ -190,17 +194,26 @@ public class UserController : ControllerBase
         await _context.SaveChangesAsync();
         await LogAudit(adminId.Value, "CREATE_USER", "ADMIN", true, $"Utilisateur créé: {user.Email}");
 
+        var nomComplet = $"{user.Prenom} {user.Nom}".Trim();
+
+        // Email 1 : credentials (email + mot de passe temporaire)
+        await _emailService.EnvoyerCredentialsAsync(
+            user.Email,
+            nomComplet,
+            motDePasseEnClair);
+
+        // Email 2 : lien de confirmation pour activer le compte
         var baseUrl = _configuration["AppSettings:BaseUrl"] ?? "http://localhost:5095";
         var lien    = $"{baseUrl}/api/Auth/confirm-email?token={Uri.EscapeDataString(rawToken)}";
 
         await _emailService.EnvoyerEmailConfirmationAsync(
             user.Email,
-            $"{user.Prenom} {user.Nom}",
+            nomComplet,
             lien);
 
         return Ok(new
         {
-            message = "Utilisateur créé avec succès. Un email de confirmation a été envoyé.",
+            message = "Utilisateur créé avec succès. Les identifiants et le lien de confirmation ont été envoyés par email.",
             userId  = user.Id
         });
     }
@@ -220,65 +233,91 @@ public class UserController : ControllerBase
                 u.Email,
                 u.Nom,
                 u.Prenom,
-                Statut = u.Statut.ToString(),
+                Statut               = u.Statut.ToString(),
                 u.DateCreation,
                 u.DateDerniereConnexion,
-                u.DateBlocage,
-                u.RaisonBlocage,
-                u.DoitChangerMotDePasse,
                 u.EmailVerifie,
-                Roles = u.UtilisateurRoles.Select(ur => new { ur.Role.Id, ur.Role.Nom }).ToList()
+                u.DoitChangerMotDePasse,
+                Roles = u.UtilisateurRoles.Select(ur => ur.Role.Nom).ToList()
             })
             .ToListAsync();
 
         return Ok(users);
     }
 
-    // ── Admin : Bloquer ────────────────────────────────────────────────────
+    // ── Admin : Bloquer utilisateur ────────────────────────────────────────
 
-    [HttpPatch("admin/users/{userId}/bloquer")]
+    [HttpPatch("admin/users/{id}/bloquer")]
     [Authorize(Roles = "ADMIN")]
-    public async Task<IActionResult> BloquerUtilisateur(Guid userId, [FromBody] BloquerRequest request)
+    public async Task<IActionResult> BloquerUtilisateur(Guid id, [FromBody] BloquerRequest request)
     {
         var adminId = GetCurrentUserId();
         if (adminId == null) return Unauthorized();
 
-        if (adminId == userId)
-            return BadRequest(new { message = "Vous ne pouvez pas bloquer votre propre compte." });
-
-        var user = await _context.Utilisateurs.FindAsync(userId);
+        var user = await _context.Utilisateurs.FindAsync(id);
         if (user == null) return NotFound(new { message = "Utilisateur introuvable." });
 
         user.Statut        = StatutUtilisateur.BLOQUE;
         user.DateBlocage   = DateTime.UtcNow;
         user.RaisonBlocage = request.Raison;
+        user.DateMiseAJour = DateTime.UtcNow;
 
         await _context.SaveChangesAsync();
-        await LogAudit(adminId.Value, "BLOCK_USER", "ADMIN", true, $"Utilisateur {user.Email} bloqué: {request.Raison}");
+        await LogAudit(adminId.Value, "BLOCK_USER", "ADMIN", true,
+            $"Utilisateur {user.Email} bloqué. Raison: {request.Raison}");
 
         return Ok(new { message = $"Utilisateur {user.Email} bloqué avec succès." });
     }
 
-    // ── Admin : Débloquer ──────────────────────────────────────────────────
+    // ── Admin : Débloquer utilisateur ──────────────────────────────────────
 
-    [HttpPatch("admin/users/{userId}/debloquer")]
+    [HttpPatch("admin/users/{id}/debloquer")]
     [Authorize(Roles = "ADMIN")]
-    public async Task<IActionResult> DebloquerUtilisateur(Guid userId)
+    public async Task<IActionResult> DebloquerUtilisateur(Guid id)
     {
         var adminId = GetCurrentUserId();
         if (adminId == null) return Unauthorized();
 
-        var user = await _context.Utilisateurs.FindAsync(userId);
+        var user = await _context.Utilisateurs.FindAsync(id);
         if (user == null) return NotFound(new { message = "Utilisateur introuvable." });
 
-        user.Statut        = StatutUtilisateur.ACTIF;
-        user.DateBlocage   = null;
-        user.RaisonBlocage = null;
+        user.Statut                      = StatutUtilisateur.ACTIF;
+        user.DateBlocage                 = null;
+        user.RaisonBlocage               = null;
+        user.TentativesConnexionEchouees = 0;
+        user.DateVerrouillage            = null;
+        user.DateMiseAJour               = DateTime.UtcNow;
 
         await _context.SaveChangesAsync();
-        await LogAudit(adminId.Value, "UNBLOCK_USER", "ADMIN", true, $"Utilisateur {user.Email} débloqué");
+        await LogAudit(adminId.Value, "UNBLOCK_USER", "ADMIN", true,
+            $"Utilisateur {user.Email} débloqué.");
 
         return Ok(new { message = $"Utilisateur {user.Email} débloqué avec succès." });
+    }
+
+    // ── Admin : Supprimer utilisateur ──────────────────────────────────────
+
+    [HttpDelete("admin/users/{id}")]
+    [Authorize(Roles = "ADMIN")]
+    public async Task<IActionResult> DeleteUser(Guid id)
+    {
+        var adminId = GetCurrentUserId();
+        if (adminId == null) return Unauthorized();
+
+        var user = await _context.Utilisateurs.FindAsync(id);
+        if (user == null) return NotFound(new { message = "Utilisateur introuvable." });
+
+        if (user.Id == adminId)
+            return BadRequest(new { message = "Vous ne pouvez pas supprimer votre propre compte." });
+
+        var email = user.Email;
+        _context.Utilisateurs.Remove(user);
+
+        await _context.SaveChangesAsync();
+        await LogAudit(adminId.Value, "DELETE_USER", "ADMIN", true,
+            $"Utilisateur {email} supprimé.");
+
+        return Ok(new { message = $"Utilisateur {email} supprimé avec succès." });
     }
 
     // ── Admin : Rôles ──────────────────────────────────────────────────────
@@ -305,16 +344,14 @@ public class UserController : ControllerBase
         if (string.IsNullOrWhiteSpace(request.Nom))
             return BadRequest(new { message = "Le nom du rôle est requis." });
 
-        var nomNormalise = request.Nom.Trim().ToUpper();
-
-        var existing = await _context.Roles.FirstOrDefaultAsync(r => r.Nom == nomNormalise);
-        if (existing != null)
-            return BadRequest(new { message = "Un rôle avec ce nom existe déjà." });
+        var exists = await _context.Roles.AnyAsync(r => r.Nom == request.Nom.ToUpper());
+        if (exists)
+            return BadRequest(new { message = "Ce rôle existe déjà." });
 
         var role = new Role
         {
             Id           = Guid.NewGuid(),
-            Nom          = nomNormalise,
+            Nom          = request.Nom.ToUpper(),
             Description  = request.Description,
             Actif        = true,
             DateCreation = DateTime.UtcNow
@@ -324,41 +361,32 @@ public class UserController : ControllerBase
         await _context.SaveChangesAsync();
         await LogAudit(adminId.Value, "CREATE_ROLE", "ADMIN", true, $"Rôle créé: {role.Nom}");
 
-        return Ok(new { message = "Rôle créé avec succès.", roleId = role.Id });
+        return Ok(new { message = $"Rôle {role.Nom} créé avec succès.", roleId = role.Id });
     }
 
     [HttpPost("admin/users/{userId}/roles/{roleId}")]
     [Authorize(Roles = "ADMIN")]
-    public async Task<IActionResult> AssignerRole(Guid userId, Guid roleId)
+    public async Task<IActionResult> AssignRole(Guid userId, Guid roleId)
     {
         var adminId = GetCurrentUserId();
         if (adminId == null) return Unauthorized();
 
         var user = await _context.Utilisateurs.FindAsync(userId);
-        if (user == null)
-        {
-            await LogAudit(adminId.Value, "ASSIGN_ROLE_FAILED", "ADMIN", false, $"Utilisateur {userId} introuvable");
-            return NotFound(new { message = "Utilisateur introuvable." });
-        }
+        if (user == null) return NotFound(new { message = "Utilisateur introuvable." });
 
         var role = await _context.Roles.FindAsync(roleId);
         if (role == null || !role.Actif)
-        {
-            await LogAudit(adminId.Value, "ASSIGN_ROLE_FAILED", "ADMIN", false, $"Rôle {roleId} introuvable");
-            return NotFound(new { message = "Rôle introuvable ou inactif." });
-        }
+            return NotFound(new { message = "Rôle introuvable." });
 
         var existingRole = await _context.UtilisateurRoles
             .FirstOrDefaultAsync(ur => ur.UtilisateurId == userId && ur.RoleId == roleId);
 
-        if (existingRole != null && existingRole.Actif)
-            return BadRequest(new { message = "Ce rôle est déjà assigné à cet utilisateur." });
-
         if (existingRole != null)
         {
+            if (existingRole.Actif)
+                return BadRequest(new { message = "L'utilisateur possède déjà ce rôle." });
+
             existingRole.Actif           = true;
-            existingRole.DateRevocation  = null;
-            existingRole.RevoquePar      = null;
             existingRole.DateAssignation = DateTime.UtcNow;
             existingRole.AssignePar      = adminId.Value;
         }
@@ -375,33 +403,28 @@ public class UserController : ControllerBase
         }
 
         await _context.SaveChangesAsync();
-        await LogAudit(adminId.Value, "ASSIGN_ROLE", "ADMIN", true, $"Rôle {role.Nom} assigné à {user.Email}");
+        await LogAudit(adminId.Value, "ASSIGN_ROLE", "ADMIN", true,
+            $"Rôle {role.Nom} assigné à {user.Email}");
 
-        return Ok(new { message = $"Rôle {role.Nom} assigné à {user.Email} avec succès." });
+        return Ok(new { message = $"Rôle {role.Nom} assigné avec succès." });
     }
 
     [HttpDelete("admin/users/{userId}/roles/{roleId}")]
     [Authorize(Roles = "ADMIN")]
-    public async Task<IActionResult> RevoquerRole(Guid userId, Guid roleId)
+    public async Task<IActionResult> RevokeRole(Guid userId, Guid roleId)
     {
         var adminId = GetCurrentUserId();
         if (adminId == null) return Unauthorized();
 
         var utilisateurRole = await _context.UtilisateurRoles
-            .Include(ur => ur.Role)
             .Include(ur => ur.Utilisateur)
+            .Include(ur => ur.Role)
             .FirstOrDefaultAsync(ur => ur.UtilisateurId == userId && ur.RoleId == roleId && ur.Actif);
 
         if (utilisateurRole == null)
-        {
-            await LogAudit(adminId.Value, "REVOKE_ROLE_FAILED", "ADMIN", false,
-                $"Rôle {roleId} non assigné à l'utilisateur {userId}");
-            return NotFound(new { message = "Ce rôle n'est pas assigné à cet utilisateur." });
-        }
+            return NotFound(new { message = "Association utilisateur-rôle introuvable." });
 
-        utilisateurRole.Actif          = false;
-        utilisateurRole.DateRevocation = DateTime.UtcNow;
-        utilisateurRole.RevoquePar     = adminId.Value;
+        utilisateurRole.Actif = false;
 
         await _context.SaveChangesAsync();
         await LogAudit(adminId.Value, "REVOKE_ROLE", "ADMIN", true,
