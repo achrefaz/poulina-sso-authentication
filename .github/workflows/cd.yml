@@ -7,8 +7,8 @@ on:
     types: [ completed ]
 
 env:
-  REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}/poulina-sso-api
+  REGISTRY: docker.io # Change registry to Docker Hub
+  IMAGE_NAME: ${{ vars.DOCKER_USERNAME }}/poulina-sso-api
 
 jobs:
   docker-build-push:
@@ -18,7 +18,7 @@ jobs:
 
     permissions:
       contents: read
-      packages: write
+      # packages: write # No longer needed for Docker Hub
 
     steps:
       - name: Checkout
@@ -26,12 +26,12 @@ jobs:
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
 
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v4
         with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          # registry: ${{ env.REGISTRY }} # 'docker.io' is the default, so this line is optional
+          username: ${{ vars.DOCKER_USERNAME }} # Use the variable for username
+          password: ${{ secrets.DOCKERHUB_TOKEN }} # Use the secret for token [citation:6][citation:7]
 
       - name: Extract Docker metadata
         id: meta
