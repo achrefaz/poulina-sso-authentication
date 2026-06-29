@@ -10,7 +10,7 @@ on:
 
 env:
   REGISTRY: docker.io 
-  IMAGE_NAME: hisnent/poulina-sso-api 
+  IMAGE_NAME: hsinemt/poulina-sso-api 
 
 jobs:
   docker-build-push:
