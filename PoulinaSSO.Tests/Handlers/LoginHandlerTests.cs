@@ -10,64 +10,61 @@ using Xunit;
 namespace PoulinaSSO.Tests.Handlers;
 
 /// <summary>
-/// Tests unitaires pour LoginHandler (login direct sans OAuth2).
+/// Tests unitaires pour LoginDirectHandler (flow simplifié sans OAuth2).
 /// Scénarios : succès, MDP incorrect, compte bloqué/désactivé/verrouillé,
-/// email non vérifié, lockout après 5 tentatives, MFA requis.
+/// email non vérifié, lockout après 5 tentatives, MFA requis,
+/// changement de mot de passe obligatoire, aucun client configuré.
 /// </summary>
-public class LoginHandlerTests
+public class LoginDirectHandlerTests
 {
     private readonly Mock<IAuthRepository> _repoMock;
     private readonly Mock<IPasswordHasher> _hasherMock;
-    private readonly LoginHandler          _handler;
+    private readonly LoginDirectHandler    _handler;
 
-    public LoginHandlerTests()
+    public LoginDirectHandlerTests()
     {
         _repoMock   = RepoMockHelper.Create();
         _hasherMock = new Mock<IPasswordHasher>();
-        _handler    = new LoginHandler(_repoMock.Object, FakeConfiguration.Build(), _hasherMock.Object);
+        _handler    = new LoginDirectHandler(_repoMock.Object, FakeConfiguration.Build(), _hasherMock.Object);
     }
 
-    private LoginCommand BuildCommand(string email = "user@test.com", string password = "Password123!")
-        => new(new LoginRequest { Email = email, Password = password }, "127.0.0.1", "TestAgent/1.0");
+    private LoginDirectCommand BuildCommand(string email = "user@test.com", string password = "Password123!")
+        => new(new LoginDirectRequest { Email = email, Password = password }, "127.0.0.1", "TestAgent/1.0");
 
     // ── Succès ────────────────────────────────────────────────────────────────
 
     [Fact]
-    public async Task Login_Succes_RetourneAccessTokenEtRefreshToken()
+    public async Task LoginDirect_Succes_RetourneAccessTokenEtRefreshTokenEtRoles()
     {
-        // Arrange
-        var user   = new UtilisateurBuilder().WithRole("RH").Build();
+        var user   = new UtilisateurBuilder().WithRole("RH_USER").Build();
         var client = new ClientApplicationBuilder().Build();
 
         _repoMock.Setup(r => r.GetUtilisateurByEmailAsync(It.IsAny<string>(), default)).ReturnsAsync(user);
         _repoMock.Setup(r => r.GetFirstClientAsync(default)).ReturnsAsync(client);
         _hasherMock.Setup(h => h.Verify(It.IsAny<string>(), It.IsAny<string>())).Returns(true);
 
-        // Act
         var result = await _handler.Handle(BuildCommand(), default);
 
-        // Assert
         result.Success.Should().BeTrue();
         result.AccessToken.Should().NotBeNullOrEmpty();
         result.RefreshToken.Should().NotBeNullOrEmpty();
+        result.Roles.Should().Contain("RH_USER");
         result.ErrorCode.Should().BeNull();
+        result.ExpiresIn.Should().Be(900);
     }
 
     [Fact]
-    public async Task Login_Succes_ReinitialiseTentativesEchouees()
+    public async Task LoginDirect_Succes_ReinitialiseTentativesEchouees()
     {
-        // Arrange — utilisateur avec 3 tentatives échouées
-        var user   = new UtilisateurBuilder().WithTentatives(3).WithRole("RH").Build();
+        var user   = new UtilisateurBuilder().WithTentatives(3).WithRole("RH_USER").Build();
         var client = new ClientApplicationBuilder().Build();
 
         _repoMock.Setup(r => r.GetUtilisateurByEmailAsync(It.IsAny<string>(), default)).ReturnsAsync(user);
         _repoMock.Setup(r => r.GetFirstClientAsync(default)).ReturnsAsync(client);
         _hasherMock.Setup(h => h.Verify(It.IsAny<string>(), It.IsAny<string>())).Returns(true);
 
-        // Act
         await _handler.Handle(BuildCommand(), default);
 
-        // Assert
         user.TentativesConnexionEchouees.Should().Be(0);
         user.DateVerrouillage.Should().BeNull();
     }
@@ -78,7 +75,7 @@ public class LoginHandlerTests
     [InlineData("", "Password123!")]
     [InlineData("user@test.com", "")]
     [InlineData("", "")]
-    public async Task Login_ChampsManquants_RetourneEchec(string email, string password)
+    public async Task LoginDirect_ChampsManquants_RetourneEchec(string email, string password)
     {
         var result = await _handler.Handle(BuildCommand(email, password), default);
 
@@ -89,7 +86,7 @@ public class LoginHandlerTests
     // ── Email introuvable ─────────────────────────────────────────────────────
 
     [Fact]
-    public async Task Login_EmailIntrouvable_RetourneMessageGenerique()
+    public async Task LoginDirect_EmailIntrouvable_RetourneMessageGenerique()
     {
         _repoMock.Setup(r => r.GetUtilisateurByEmailAsync(It.IsAny<string>(), default))
                  .ReturnsAsync((Domain.Models.Utilisateur?)null);
@@ -97,14 +94,13 @@ public class LoginHandlerTests
         var result = await _handler.Handle(BuildCommand(), default);
 
         result.Success.Should().BeFalse();
-        // Message générique — ne révèle pas si l'email existe
         result.Message.Should().Be("Email ou mot de passe incorrect.");
     }
 
     // ── Mot de passe incorrect ────────────────────────────────────────────────
 
     [Fact]
-    public async Task Login_MdpIncorrect_IncrementeTentatives()
+    public async Task LoginDirect_MdpIncorrect_IncrementeTentatives()
     {
         var user = new UtilisateurBuilder().Build();
         _repoMock.Setup(r => r.GetUtilisateurByEmailAsync(It.IsAny<string>(), default)).ReturnsAsync(user);
@@ -116,7 +112,7 @@ public class LoginHandlerTests
     }
 
     [Fact]
-    public async Task Login_5MdpIncorrects_VerrouilleLCompte()
+    public async Task LoginDirect_5MdpIncorrects_VerrouilleLCompte()
     {
         var user = new UtilisateurBuilder().WithTentatives(4).Build();
         _repoMock.Setup(r => r.GetUtilisateurByEmailAsync(It.IsAny<string>(), default)).ReturnsAsync(user);
@@ -133,7 +129,7 @@ public class LoginHandlerTests
     // ── Compte bloqué ─────────────────────────────────────────────────────────
 
     [Fact]
-    public async Task Login_CompteBloque_RetourneErreurBLOCKED()
+    public async Task LoginDirect_CompteBloque_RetourneErreurBLOCKED()
     {
         var user = new UtilisateurBuilder().WithStatut(StatutUtilisateur.BLOQUE).Build();
         _repoMock.Setup(r => r.GetUtilisateurByEmailAsync(It.IsAny<string>(), default)).ReturnsAsync(user);
@@ -147,7 +143,7 @@ public class LoginHandlerTests
     // ── Compte désactivé ──────────────────────────────────────────────────────
 
     [Fact]
-    public async Task Login_CompteDesactive_RetourneErreurDISABLED()
+    public async Task LoginDirect_CompteDesactive_RetourneErreurDISABLED()
     {
         var user = new UtilisateurBuilder().WithStatut(StatutUtilisateur.DESACTIVE).Build();
         _repoMock.Setup(r => r.GetUtilisateurByEmailAsync(It.IsAny<string>(), default)).ReturnsAsync(user);
@@ -161,7 +157,7 @@ public class LoginHandlerTests
     // ── Compte verrouillé temporairement ─────────────────────────────────────
 
     [Fact]
-    public async Task Login_CompteVerrouille_RetourneErreurLOCKED()
+    public async Task LoginDirect_CompteVerrouille_RetourneErreurLOCKED()
     {
         var user = new UtilisateurBuilder()
             .WithVerrouillage(DateTime.UtcNow.AddMinutes(10))
@@ -175,12 +171,11 @@ public class LoginHandlerTests
     }
 
     [Fact]
-    public async Task Login_VerrouillageExpire_AuthoriseLaConnexion()
+    public async Task LoginDirect_VerrouillageExpire_AuthoriseLaConnexion()
     {
-        // Verrouillage dans le passé → doit être ignoré
         var user   = new UtilisateurBuilder()
             .WithVerrouillage(DateTime.UtcNow.AddMinutes(-1))
-            .WithRole("RH")
+            .WithRole("RH_USER")
             .Build();
         var client = new ClientApplicationBuilder().Build();
 
@@ -196,7 +191,7 @@ public class LoginHandlerTests
     // ── Email non vérifié ─────────────────────────────────────────────────────
 
     [Fact]
-    public async Task Login_EmailNonVerifie_RetourneErreurEMAIL_NOT_VERIFIED()
+    public async Task LoginDirect_EmailNonVerifie_RetourneErreurEMAIL_NOT_VERIFIED()
     {
         var user = new UtilisateurBuilder().WithEmailVerifie(false).Build();
         _repoMock.Setup(r => r.GetUtilisateurByEmailAsync(It.IsAny<string>(), default)).ReturnsAsync(user);
@@ -206,17 +201,18 @@ public class LoginHandlerTests
 
         result.Success.Should().BeFalse();
         result.ErrorCode.Should().Be("EMAIL_NOT_VERIFIED");
+        result.EmailVerified.Should().BeFalse();
     }
 
     // ── MFA requis ────────────────────────────────────────────────────────────
 
     [Fact]
-    public async Task Login_MfaActif_RetourneMfaPendingTokenEtCodeMFA_REQUIRED()
+    public async Task LoginDirect_MfaActif_RetourneMfaPendingToken()
     {
         var secret = TotpHelper.GenerateSecret();
         var user   = new UtilisateurBuilder()
             .WithMfaTotp(secret)
-            .WithRole("RH")
+            .WithRole("RH_USER")
             .Build();
 
         _repoMock.Setup(r => r.GetUtilisateurByEmailAsync(It.IsAny<string>(), default)).ReturnsAsync(user);
@@ -225,17 +221,40 @@ public class LoginHandlerTests
         var result = await _handler.Handle(BuildCommand(), default);
 
         result.Success.Should().BeTrue();
-        result.ErrorCode.Should().Be("MFA_REQUIRED");
-        result.AccessToken.Should().NotBeNullOrEmpty("le MfaPendingToken est retourné dans AccessToken");
-        result.RefreshToken.Should().BeNullOrEmpty("pas encore de refresh token à ce stade");
+        result.MfaRequired.Should().BeTrue();
+        result.MfaPendingToken.Should().NotBeNullOrEmpty();
+        result.AccessToken.Should().BeNullOrEmpty("pas de vrai token avant validation TOTP");
+        result.RefreshToken.Should().BeNullOrEmpty("pas de refresh token avant validation TOTP");
+    }
+
+    // ── Changement de mot de passe obligatoire ────────────────────────────────
+
+    [Fact]
+    public async Task LoginDirect_DoitChangerMotDePasse_RetournePasswordChangeRequired()
+    {
+        var user = new UtilisateurBuilder()
+            .WithRole("RH_USER")
+            .WithDoitChangerMotDePasse(true)
+            .Build();
+
+        _repoMock.Setup(r => r.GetUtilisateurByEmailAsync(It.IsAny<string>(), default)).ReturnsAsync(user);
+        _hasherMock.Setup(h => h.Verify(It.IsAny<string>(), It.IsAny<string>())).Returns(true);
+
+        var result = await _handler.Handle(BuildCommand(), default);
+
+        result.Success.Should().BeTrue();
+        result.PasswordChangeRequired.Should().BeTrue();
+        result.AccessToken.Should().NotBeNullOrEmpty("token temporaire nécessaire pour changer le mot de passe");
+        result.RefreshToken.Should().BeNullOrEmpty("pas de refresh token tant que le mot de passe n'est pas changé");
+        result.Roles.Should().NotBeEmpty();
     }
 
     // ── Aucun client configuré ────────────────────────────────────────────────
-    
+
     [Fact]
-    public async Task Login_AucunClientConfigure_RetourneEchec()
+    public async Task LoginDirect_AucunClientConfigure_RetourneEchec()
     {
-        var user = new UtilisateurBuilder().WithRole("RH").Build();
+        var user = new UtilisateurBuilder().WithRole("RH_USER").Build();
         _repoMock.Setup(r => r.GetUtilisateurByEmailAsync(It.IsAny<string>(), default)).ReturnsAsync(user);
         _repoMock.Setup(r => r.GetFirstClientAsync(default))
                  .ReturnsAsync((Domain.Models.ClientApplication?)null);

@@ -14,7 +14,6 @@ namespace Domain.Interfaces
         // ── Sessions & Tokens ─────────────────────────────────────────────────
         Task AddSessionAsync(Session session);
         Task AddRefreshTokenAsync(RefreshToken token);
-        Task AddAuthorizationCodeAsync(AuthorizationCode code);
         Task AddAuditLogAsync(AuditLog log);
 
         // ── Clients ───────────────────────────────────────────────────────────
@@ -24,9 +23,6 @@ namespace Domain.Interfaces
         // ── Refresh Tokens ────────────────────────────────────────────────────
         Task<RefreshToken?> GetRefreshTokenByHashAsync(string hash, CancellationToken ct = default);
         Task<List<RefreshToken>> GetActiveRefreshTokensAsync(Guid userId, CancellationToken ct = default);
-
-        // ── Authorization Codes ───────────────────────────────────────────────
-        Task<AuthorizationCode?> GetAuthorizationCodeByHashAsync(string hash, CancellationToken ct = default);
 
         // ── Sessions ──────────────────────────────────────────────────────────
         Task<List<Session>> GetActiveSessionsAsync(Guid userId, CancellationToken ct = default);
@@ -45,10 +41,10 @@ namespace Domain.Interfaces
         Task<(List<AuditLogDto> Items, int Total)> GetAuditLogsAsync(
             int page,
             int pageSize,
-            string? actionFilter = null,
-            DateTime? dateDebut  = null,
-            DateTime? dateFin    = null,
-            CancellationToken ct = default);
+            string?   actionFilter = null,
+            DateTime? dateDebut    = null,
+            DateTime? dateFin      = null,
+            CancellationToken ct   = default);
 
         // ── Persistance ───────────────────────────────────────────────────────
         Task SaveChangesAsync(CancellationToken ct = default);

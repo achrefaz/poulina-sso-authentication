@@ -17,10 +17,10 @@ namespace PoulinaSSO.Tests.Helpers;
 /// </summary>
 public static class FakeConfiguration
 {
-    public const string SecretKey  = "PoulinaSSO-SuperSecretKey-2024!@#$";
-    public const string Issuer     = "https://localhost:7001";
-    public const string Audience   = "https://localhost:7001";
-    public const string BaseUrl    = "http://localhost:5095";
+    public const string SecretKey = "PoulinaSSO-SuperSecretKey-2024!@#$";
+    public const string Issuer    = "https://localhost:7001";
+    public const string Audience  = "https://localhost:7001";
+    public const string BaseUrl   = "http://localhost:5095";
 
     public static IConfiguration Build() =>
         new ConfigurationBuilder()
@@ -47,36 +47,41 @@ public class UtilisateurBuilder
 {
     private readonly Utilisateur _u = new()
     {
-        Id                           = Guid.NewGuid(),
-        Email                        = "test@poulina.com",
-        Nom                          = "Dupont",
-        Prenom                       = "Jean",
-        MotDePasseHash               = "hashed_password",
-        Salt                         = string.Empty,
-        Statut                       = StatutUtilisateur.ACTIF,
-        EmailVerifie                 = true,
-        TypeMFA                      = TypeMFA.AUCUN,
-        MFAValidee                   = false,
-        TentativesConnexionEchouees  = 0,
-        DoitChangerMotDePasse        = false,
-        DateCreation                 = DateTime.UtcNow,
-        UtilisateurRoles             = new List<UtilisateurRole>()
+        Id                          = Guid.NewGuid(),
+        Email                       = "test@poulina.com",
+        Nom                         = "Dupont",
+        Prenom                      = "Jean",
+        MotDePasseHash              = "hashed_password",
+        Salt                        = string.Empty,
+        Statut                      = StatutUtilisateur.ACTIF,
+        EmailVerifie                = true,
+        TypeMFA                     = TypeMFA.AUCUN,
+        MFAValidee                  = false,
+        TentativesConnexionEchouees = 0,
+        DoitChangerMotDePasse       = false,
+        DateCreation                = DateTime.UtcNow,
+        UtilisateurRoles            = new List<UtilisateurRole>()
     };
 
-    public UtilisateurBuilder WithId(Guid id)                     { _u.Id = id;                                     return this; }
-    public UtilisateurBuilder WithEmail(string email)             { _u.Email = email;                               return this; }
-    public UtilisateurBuilder WithStatut(StatutUtilisateur s)     { _u.Statut = s;                                  return this; }
-    public UtilisateurBuilder WithEmailVerifie(bool v)            { _u.EmailVerifie = v;                            return this; }
-    public UtilisateurBuilder WithPasswordHash(string h)          { _u.MotDePasseHash = h;                          return this; }
-    public UtilisateurBuilder WithVerrouillage(DateTime? d)       { _u.DateVerrouillage = d;                        return this; }
-    public UtilisateurBuilder WithTentatives(int n)               { _u.TentativesConnexionEchouees = n;             return this; }
-    public UtilisateurBuilder WithDoitChangerMdp(bool v)         { _u.DoitChangerMotDePasse = v;                   return this; }
+    public UtilisateurBuilder WithId(Guid id)                 { _u.Id = id;                         return this; }
+    public UtilisateurBuilder WithEmail(string email)         { _u.Email = email;                   return this; }
+    public UtilisateurBuilder WithStatut(StatutUtilisateur s) { _u.Statut = s;                      return this; }
+    public UtilisateurBuilder WithEmailVerifie(bool v)        { _u.EmailVerifie = v;                return this; }
+    public UtilisateurBuilder WithPasswordHash(string h)      { _u.MotDePasseHash = h;              return this; }
+    public UtilisateurBuilder WithVerrouillage(DateTime? d)   { _u.DateVerrouillage = d;            return this; }
+    public UtilisateurBuilder WithTentatives(int n)           { _u.TentativesConnexionEchouees = n; return this; }
+
+    // Deux noms acceptés pour éviter les cassures dans les tests existants
+    public UtilisateurBuilder WithDoitChangerMdp(bool v)          { _u.DoitChangerMotDePasse = v; return this; }
+    public UtilisateurBuilder WithDoitChangerMotDePasse(bool v)   { _u.DoitChangerMotDePasse = v; return this; }
+
     public UtilisateurBuilder WithRole(string roleName)
     {
         var role = new Role { Id = Guid.NewGuid(), Nom = roleName };
         _u.UtilisateurRoles.Add(new UtilisateurRole { Role = role, Actif = true });
         return this;
     }
+
     public UtilisateurBuilder WithMfaTotp(string? secret = null)
     {
         _u.TypeMFA    = TypeMFA.TOTP;
@@ -84,36 +89,38 @@ public class UtilisateurBuilder
         _u.SecretMFA  = secret ?? TotpHelper.GenerateSecret();
         return this;
     }
+
     public UtilisateurBuilder WithEmailVerificationToken(string tokenHash, DateTime? expiration = null)
     {
-        _u.EmailVerifie               = false;
-        _u.TokenVerificationEmail     = tokenHash;
+        _u.EmailVerifie                = false;
+        _u.TokenVerificationEmail      = tokenHash;
         _u.TokenVerificationExpiration = expiration ?? DateTime.UtcNow.AddHours(24);
         return this;
     }
+
     public Utilisateur Build() => _u;
 }
 
 /// <summary>
-/// Builder fluent pour les clients OAuth2.
+/// Builder fluent pour les clients OAuth2 / applications.
 /// </summary>
 public class ClientApplicationBuilder
 {
     private readonly ClientApplication _c = new()
     {
-        Id               = Guid.NewGuid(),
-        ClientId         = "rh-app",
-        Nom              = "RH Application",
-        RedirectionUris  = "http://localhost:3001/callback",
-        AllowedRoles     = "RH",
-        RequiertPKCE     = true,
-        Actif            = true,
+        Id              = Guid.NewGuid(),
+        ClientId        = "rh-app",
+        Nom             = "RH Application",
+        RedirectionUris = "http://localhost:3001/callback",
+        AllowedRoles    = "RH_USER,RH_ADMIN",
+        RequiertPKCE    = true,
+        Actif           = true,
     };
 
-    public ClientApplicationBuilder WithClientId(string id)      { _c.ClientId = id;          return this; }
-    public ClientApplicationBuilder WithRedirectUri(string uri)  { _c.RedirectionUris = uri;  return this; }
-    public ClientApplicationBuilder WithAllowedRoles(string r)   { _c.AllowedRoles = r;       return this; }
-    public ClientApplicationBuilder WithRequiertPKCE(bool v)     { _c.RequiertPKCE = v;       return this; }
+    public ClientApplicationBuilder WithClientId(string id)     { _c.ClientId = id;         return this; }
+    public ClientApplicationBuilder WithRedirectUri(string uri) { _c.RedirectionUris = uri; return this; }
+    public ClientApplicationBuilder WithAllowedRoles(string r)  { _c.AllowedRoles = r;      return this; }
+    public ClientApplicationBuilder WithRequiertPKCE(bool v)    { _c.RequiertPKCE = v;      return this; }
     public ClientApplication Build() => _c;
 }
 
@@ -149,10 +156,10 @@ public static class MfaPendingTokenHelper
         var key    = Encoding.UTF8.GetBytes(FakeConfiguration.SecretKey);
         var claims = new[]
         {
-            new Claim(JwtRegisteredClaimNames.Sub,   userId.ToString()),
-            new Claim(ClaimTypes.NameIdentifier,      userId.ToString()),
-            new Claim(JwtRegisteredClaimNames.Jti,   Guid.NewGuid().ToString()),
-            new Claim("mfa_pending",                  "true"),
+            new Claim(JwtRegisteredClaimNames.Sub, userId.ToString()),
+            new Claim(ClaimTypes.NameIdentifier,   userId.ToString()),
+            new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString()),
+            new Claim("mfa_pending",               "true"),
         };
 
         var token = new JwtSecurityToken(
@@ -160,8 +167,8 @@ public static class MfaPendingTokenHelper
             audience:           FakeConfiguration.Audience,
             claims:             claims,
             expires:            expired
-                                    ? DateTime.UtcNow.AddMinutes(-1)   // expiré
-                                    : DateTime.UtcNow.AddMinutes(5),   // valide
+                                    ? DateTime.UtcNow.AddMinutes(-1)
+                                    : DateTime.UtcNow.AddMinutes(5),
             signingCredentials: new SigningCredentials(
                 new SymmetricSecurityKey(key),
                 SecurityAlgorithms.HmacSha256));
@@ -175,7 +182,6 @@ public static class MfaPendingTokenHelper
 /// </summary>
 public static class RepoMockHelper
 {
-    /// <summary>Crée un Mock basique avec SaveChanges et AddAuditLog qui ne font rien.</summary>
     public static Mock<IAuthRepository> Create()
     {
         var mock = new Mock<IAuthRepository>();
@@ -186,8 +192,6 @@ public static class RepoMockHelper
         mock.Setup(r => r.AddSessionAsync(It.IsAny<Session>()))
             .Returns(Task.CompletedTask);
         mock.Setup(r => r.AddRefreshTokenAsync(It.IsAny<RefreshToken>()))
-            .Returns(Task.CompletedTask);
-        mock.Setup(r => r.AddAuthorizationCodeAsync(It.IsAny<AuthorizationCode>()))
             .Returns(Task.CompletedTask);
         mock.Setup(r => r.CleanExpiredRevokedTokensAsync(It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
