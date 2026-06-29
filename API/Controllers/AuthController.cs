@@ -5,6 +5,7 @@ using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using Domain.Commands.Auth;
 using Domain.Queries.Auth;
+using Microsoft.AspNetCore.RateLimiting;
 using QRCoder;
 
 namespace API.Controllers;
@@ -60,13 +61,14 @@ public class AuthController : ControllerBase
 
     // Login direct
 
-    [HttpPost("login")]
-    public async Task<IActionResult> Login([FromBody] LoginRequest request)
+    [HttpPost("login-direct")]
+    [EnableRateLimiting("login")]
+    public async Task<IActionResult> LoginDirect([FromBody] LoginDirectRequest request)
     {
         var ip        = HttpContext.Connection.RemoteIpAddress?.ToString() ?? "";
         var userAgent = Request.Headers["User-Agent"].ToString();
 
-        var result = await _mediator.Send(new LoginCommand(request, ip, userAgent));
+        var result = await _mediator.Send(new LoginDirectCommand(request, ip, userAgent));
 
         if (!result.Success)
         {
@@ -80,87 +82,29 @@ public class AuthController : ControllerBase
             };
         }
 
-        if (result.ErrorCode == "MFA_REQUIRED")
-        {
-            return Ok(new
-            {
-                mfaRequired     = true,
-                mfaPendingToken = result.AccessToken,
-                message         = result.Message
-            });
-        }
+        if (result.MfaRequired)
+            return Ok(new { mfaRequired = true, mfaPendingToken = result.MfaPendingToken });
+
+        if (result.PasswordChangeRequired)
+            return Ok(new { passwordChangeRequired = true, accessToken = result.AccessToken, roles = result.Roles });
 
         if (result.RefreshToken != null)
             SetRefreshTokenCookie(result.RefreshToken);
 
-        var response = new Dictionary<string, object?>
+        return Ok(new
         {
-            ["accessToken"] = result.AccessToken,
-            ["expiresIn"]   = 900,
-            ["tokenType"]   = "Bearer",
-            ["userId"]      = result.UserId
-        };
-
-        if (result.DoitChangerMotDePasse)
-            response["passwordChangeRequired"] = true;
-
-        return Ok(response);
-    }
-
-    // Login with code (OAuth2 Authorization Code Flow)
-
-    [HttpPost("login-with-code")]
-    public async Task<IActionResult> LoginWithCode([FromBody] LoginWithCodeRequest request)
-    {
-        var ip        = HttpContext.Connection.RemoteIpAddress?.ToString() ?? "";
-        var userAgent = Request.Headers["User-Agent"].ToString();
-
-        var result = await _mediator.Send(new LoginWithCodeCommand(request, ip, userAgent));
-
-        if (!result.Success)
-        {
-            return result.ErrorCode switch
-            {
-                "invalid_client"          => BadRequest(new { error = result.ErrorCode, message = result.Message }),
-                "invalid_redirect_uri"    => BadRequest(new { error = result.ErrorCode, message = result.Message }),
-                "code_challenge_required" => BadRequest(new { error = result.ErrorCode, message = result.Message }),
-                "access_denied"           => StatusCode(403, new { error = result.ErrorCode, message = result.Message }),
-                "EMAIL_NOT_VERIFIED"      => Unauthorized(new { message = result.Message, errorCode = result.ErrorCode }),
-                "LOCKED"                  => Unauthorized(new { message = result.Message, errorCode = result.ErrorCode }),
-                "DISABLED"                => Unauthorized(new { message = result.Message, errorCode = result.ErrorCode }),
-                _                         => Unauthorized(new { message = result.Message })
-            };
-        }
-
-        // MFA requis — retourner le pending token au SSO (HTTP 200)
-        if (result.ErrorCode == "MFA_REQUIRED")
-        {
-            return Ok(new
-            {
-                mfaRequired     = true,
-                mfaPendingToken = result.AccessToken,
-                message         = result.Message
-            });
-        }
-
-        // Changement de mot de passe obligatoire — retourner un token temporaire
-        if (result.ErrorCode == "PWD_CHANGE_REQUIRED")
-        {
-            return Ok(new
-            {
-                passwordChangeRequired = true,
-                accessToken            = result.AccessToken,
-                message                = result.Message
-            });
-        }
-
-        return Ok(new { authorizationCode = result.Code, redirectUri = result.RedirectUri });
+            accessToken = result.AccessToken,
+            expiresIn   = result.ExpiresIn,
+            tokenType   = "Bearer",
+            roles       = result.Roles,
+            userId      = result.UserId
+        });
     }
 
     // Refresh Token
 
     [HttpPost("refresh")]
-    public async Task<IActionResult> Refresh()
+    public async Task<IActionResult> Refresh([FromBody] RefreshRequest? body)
     {
         var refreshTokenFromCookie = GetRefreshTokenFromCookie();
 
@@ -169,7 +113,13 @@ public class AuthController : ControllerBase
 
         var ip     = HttpContext.Connection.RemoteIpAddress?.ToString() ?? "";
         var result = await _mediator.Send(
-            new RefreshTokenCommand(new RefreshRequest { RefreshToken = refreshTokenFromCookie }, ip));
+            new RefreshTokenCommand(
+                new RefreshRequest
+                {
+                    RefreshToken = refreshTokenFromCookie,
+                    ClientId     = body?.ClientId
+                },
+                ip));
 
         if (!result.Success)
         {
@@ -189,12 +139,12 @@ public class AuthController : ControllerBase
     [Authorize]
     public async Task<IActionResult> Logout()
     {
-        var userIdStr = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        var userIdStr = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
         if (!Guid.TryParse(userIdStr, out var userId))
             return Unauthorized();
 
-        var jti        = User.FindFirstValue(JwtRegisteredClaimNames.Jti) ?? "";
-        var expClaim   = User.FindFirstValue(JwtRegisteredClaimNames.Exp) ?? "0";
+        var jti        = User.FindFirst(JwtRegisteredClaimNames.Jti)?.Value ?? "";
+        var expClaim   = User.FindFirst(JwtRegisteredClaimNames.Exp)?.Value ?? "0";
         var expiration = DateTimeOffset.FromUnixTimeSeconds(long.Parse(expClaim)).UtcDateTime;
 
         var refreshTokenFromCookie = GetRefreshTokenFromCookie();
@@ -209,13 +159,13 @@ public class AuthController : ControllerBase
         return Ok(new { message = result.Message });
     }
 
-    // UserInfo (OpenID Connect)
+    // UserInfo
 
     [HttpGet("userinfo")]
     [Authorize]
     public async Task<IActionResult> UserInfo()
     {
-        var userIdStr = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        var userIdStr = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
         if (!Guid.TryParse(userIdStr, out var userId))
             return Unauthorized();
 
@@ -238,55 +188,13 @@ public class AuthController : ControllerBase
             : NotFound(new { message = "Utilisateur introuvable." });
     }
 
-    // Authorize (OAuth2 step 1)
-
-    [HttpGet("authorize")]
-    public async Task<IActionResult> Authorize(
-        [FromQuery] string  client_id,
-        [FromQuery] string  redirect_uri,
-        [FromQuery] string  response_type,
-        [FromQuery] string  scope,
-        [FromQuery] string? state,
-        [FromQuery] string? code_challenge,
-        [FromQuery] string? code_challenge_method)
-    {
-        var result = await _mediator.Send(
-            new AuthorizeQuery(client_id, redirect_uri, response_type, scope, state, code_challenge, code_challenge_method));
-
-        return result.Success
-            ? Ok(new { message = "Paramètres valides.", loginUrl = result.LoginUrl })
-            : BadRequest(new { error = result.ErrorMessage });
-    }
-
-    // Token (exchange code → access token)
-
-    [HttpPost("token")]
-    public async Task<IActionResult> Token([FromBody] TokenRequest request)
-    {
-        var result = await _mediator.Send(new ExchangeCodeCommand(request));
-
-        if (!result.Success)
-            return BadRequest(new { error = result.ErrorCode, error_description = result.ErrorDescription });
-
-        if (result.RefreshToken != null)
-            SetRefreshTokenCookie(result.RefreshToken);
-
-        return Ok(new
-        {
-            access_token = result.AccessToken,
-            token_type   = result.TokenType,
-            expires_in   = result.ExpiresIn,
-            scope        = result.Scope
-        });
-    }
-
     // MFA Setup
 
     [HttpPost("mfa/setup")]
     [Authorize]
     public async Task<IActionResult> MfaSetup()
     {
-        var userIdStr = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        var userIdStr = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
         if (!Guid.TryParse(userIdStr, out var userId))
             return Unauthorized();
 
@@ -324,7 +232,7 @@ public class AuthController : ControllerBase
     [Authorize]
     public async Task<IActionResult> MfaVerifySetup([FromBody] MfaCodeRequest request)
     {
-        var userIdStr = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        var userIdStr = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
         if (!Guid.TryParse(userIdStr, out var userId))
             return Unauthorized();
 
@@ -335,9 +243,10 @@ public class AuthController : ControllerBase
             : BadRequest(new { message = result.Message });
     }
 
-    // MFA Verify (login step 2) — génère un authorizationCode OAuth2
+    // MFA Verify Login
 
     [HttpPost("mfa/verify")]
+    [EnableRateLimiting("login")]
     public async Task<IActionResult> MfaVerify([FromBody] MfaVerifyRequest request)
     {
         if (string.IsNullOrEmpty(request.MfaPendingToken) || string.IsNullOrEmpty(request.Code))
@@ -350,18 +259,22 @@ public class AuthController : ControllerBase
             request.MfaPendingToken,
             request.Code,
             ip,
-            userAgent,
-            request.ClientId,
-            request.RedirectUri,
-            request.State,
-            request.CodeChallenge,
-            request.CodeChallengeMethod,
-            request.Scopes));
+            userAgent));
 
         if (!result.Success)
             return Unauthorized(new { message = result.Message });
 
-        return Ok(new { redirectUri = result.RedirectUri });
+        if (result.RefreshToken != null)
+            SetRefreshTokenCookie(result.RefreshToken);
+
+        return Ok(new
+        {
+            accessToken = result.AccessToken,
+            expiresIn   = 900,
+            tokenType   = "Bearer",
+            roles       = result.Roles,
+            userId      = result.UserId
+        });
     }
 
     // MFA Disable
@@ -370,7 +283,7 @@ public class AuthController : ControllerBase
     [Authorize]
     public async Task<IActionResult> MfaDisable([FromBody] MfaCodeRequest request)
     {
-        var userIdStr = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        var userIdStr = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
         if (!Guid.TryParse(userIdStr, out var userId))
             return Unauthorized();
 

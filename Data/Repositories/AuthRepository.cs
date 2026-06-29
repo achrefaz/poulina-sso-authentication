@@ -44,9 +44,6 @@ namespace Data.Repositories
         public async Task AddRefreshTokenAsync(RefreshToken token)
             => await _context.RefreshTokens.AddAsync(token);
 
-        public async Task AddAuthorizationCodeAsync(AuthorizationCode code)
-            => await _context.AuthorizationCodes.AddAsync(code);
-
         public async Task AddAuditLogAsync(AuditLog log)
             => await _context.AuditLogs.AddAsync(log);
 
@@ -73,16 +70,6 @@ namespace Data.Repositories
             => _context.RefreshTokens
                 .Where(r => r.UtilisateurId == userId && !r.EstUtilise)
                 .ToListAsync(ct);
-
-        // ── Authorization Codes ───────────────────────────────────────────────
-
-        public Task<AuthorizationCode?> GetAuthorizationCodeByHashAsync(string hash, CancellationToken ct = default)
-            => _context.AuthorizationCodes
-                .Include(ac => ac.Utilisateur)
-                    .ThenInclude(u => u.UtilisateurRoles.Where(ur => ur.Actif))
-                    .ThenInclude(ur => ur.Role)
-                .Include(ac => ac.Client)
-                .FirstOrDefaultAsync(ac => ac.CodeHash == hash, ct);
 
         // ── Sessions ──────────────────────────────────────────────────────────
 

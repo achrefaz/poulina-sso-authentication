@@ -68,53 +68,6 @@ namespace Data.Migrations
                     b.ToTable("AuditLogs");
                 });
 
-            modelBuilder.Entity("Domain.Models.AuthorizationCode", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<Guid>("ClientId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<string>("CodeChallenge")
-                        .HasColumnType("nvarchar(max)");
-
-                    b.Property<string>("CodeChallengeMethod")
-                        .HasColumnType("nvarchar(max)");
-
-                    b.Property<string>("CodeHash")
-                        .IsRequired()
-                        .HasColumnType("nvarchar(450)");
-
-                    b.Property<DateTime>("DateCreation")
-                        .HasColumnType("datetime2");
-
-                    b.Property<DateTime>("DateExpiration")
-                        .HasColumnType("datetime2");
-
-                    b.Property<bool>("EstUtilise")
-                        .HasColumnType("bit");
-
-                    b.Property<string>("Scopes")
-                        .IsRequired()
-                        .HasColumnType("nvarchar(max)");
-
-                    b.Property<Guid>("UtilisateurId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("ClientId");
-
-                    b.HasIndex("CodeHash")
-                        .IsUnique();
-
-                    b.HasIndex("UtilisateurId");
-
-                    b.ToTable("AuthorizationCodes");
-                });
-
             modelBuilder.Entity("Domain.Models.ClientApplication", b =>
                 {
                     b.Property<Guid>("Id")
@@ -194,9 +147,9 @@ namespace Data.Migrations
                             Description = "Plateforme RH Poulina",
                             Nom = "RH Application",
                             PostLogoutRedirectionUris = "http://localhost:3001",
-                            RedirectionUris = "http://localhost:3001/callback",
+                            RedirectionUris = "http://localhost:3001",
                             RefreshTokenLifetimeJours = 7,
-                            RequiertPKCE = true,
+                            RequiertPKCE = false,
                             TokenLifetimeSecondes = 900
                         },
                         new
@@ -211,9 +164,9 @@ namespace Data.Migrations
                             Description = "Plateforme Finance Poulina",
                             Nom = "Finance Application",
                             PostLogoutRedirectionUris = "http://localhost:3002",
-                            RedirectionUris = "http://localhost:3002/callback",
+                            RedirectionUris = "http://localhost:3002",
                             RefreshTokenLifetimeJours = 7,
-                            RequiertPKCE = true,
+                            RequiertPKCE = false,
                             TokenLifetimeSecondes = 900
                         },
                         new
@@ -228,9 +181,9 @@ namespace Data.Migrations
                             Description = "Dashboard analytique Poulina",
                             Nom = "Dashboard",
                             PostLogoutRedirectionUris = "http://localhost:3003",
-                            RedirectionUris = "http://localhost:3003/callback",
+                            RedirectionUris = "http://localhost:3003",
                             RefreshTokenLifetimeJours = 7,
-                            RequiertPKCE = true,
+                            RequiertPKCE = false,
                             TokenLifetimeSecondes = 900
                         });
                 });
@@ -549,25 +502,6 @@ namespace Data.Migrations
                     b.Navigation("Utilisateur");
                 });
 
-            modelBuilder.Entity("Domain.Models.AuthorizationCode", b =>
-                {
-                    b.HasOne("Domain.Models.ClientApplication", "Client")
-                        .WithMany("AuthorizationCodes")
-                        .HasForeignKey("ClientId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.HasOne("Domain.Models.Utilisateur", "Utilisateur")
-                        .WithMany()
-                        .HasForeignKey("UtilisateurId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("Client");
-
-                    b.Navigation("Utilisateur");
-                });
-
             modelBuilder.Entity("Domain.Models.RefreshToken", b =>
                 {
                     b.HasOne("Domain.Models.ClientApplication", "Client")
@@ -619,8 +553,6 @@ namespace Data.Migrations
 
             modelBuilder.Entity("Domain.Models.ClientApplication", b =>
                 {
-                    b.Navigation("AuthorizationCodes");
-
                     b.Navigation("RefreshTokens");
                 });
 

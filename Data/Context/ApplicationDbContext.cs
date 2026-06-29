@@ -11,15 +11,14 @@ namespace Data.Context
         {
         }
 
-        public DbSet<Utilisateur>        Utilisateurs        { get; set; }
-        public DbSet<ClientApplication>  ClientsApplications { get; set; }
-        public DbSet<Session>            Sessions            { get; set; }
-        public DbSet<RefreshToken>       RefreshTokens       { get; set; }
-        public DbSet<AuthorizationCode>  AuthorizationCodes  { get; set; }
-        public DbSet<AuditLog>           AuditLogs           { get; set; }
-        public DbSet<Role>               Roles               { get; set; }
-        public DbSet<UtilisateurRole>    UtilisateurRoles    { get; set; }
-        public DbSet<RevokedToken>       RevokedTokens       { get; set; }
+        public DbSet<Utilisateur>       Utilisateurs        { get; set; }
+        public DbSet<ClientApplication> ClientsApplications { get; set; }
+        public DbSet<Session>           Sessions            { get; set; }
+        public DbSet<RefreshToken>      RefreshTokens       { get; set; }
+        public DbSet<AuditLog>          AuditLogs           { get; set; }
+        public DbSet<Role>              Roles               { get; set; }
+        public DbSet<UtilisateurRole>   UtilisateurRoles    { get; set; }
+        public DbSet<RevokedToken>      RevokedTokens       { get; set; }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -41,8 +40,6 @@ namespace Data.Context
                 entity.Property(e => e.TypeMFA)
                       .HasConversion<string>()
                       .HasMaxLength(50);
-
-                // ── Email Verification ────────────────────────────────────────
                 entity.Property(e => e.EmailVerifie)
                       .HasDefaultValue(false);
                 entity.Property(e => e.TokenVerificationEmail)
@@ -116,17 +113,6 @@ namespace Data.Context
                       .OnDelete(DeleteBehavior.Restrict);
             });
 
-            // ── AuthorizationCode ─────────────────────────────────────────────
-            modelBuilder.Entity<AuthorizationCode>(entity =>
-            {
-                entity.HasKey(e => e.Id);
-                entity.HasIndex(e => e.CodeHash).IsUnique();
-                entity.HasOne(e => e.Client)
-                      .WithMany(c => c.AuthorizationCodes)
-                      .HasForeignKey(e => e.ClientId)
-                      .OnDelete(DeleteBehavior.Restrict);
-            });
-
             // ── AuditLog ──────────────────────────────────────────────────────
             modelBuilder.Entity<AuditLog>(entity =>
             {
@@ -191,13 +177,13 @@ namespace Data.Context
                     Description               = "Plateforme RH Poulina",
                     ClientId                  = "rh-client",
                     ClientSecretHash          = "rh-secret-hash",
-                    RedirectionUris           = "http://localhost:3001/callback",
+                    RedirectionUris           = "http://localhost:3001",
                     PostLogoutRedirectionUris = "http://localhost:3001",
                     AllowedScopes             = "openid profile email offline_access",
                     AllowedRoles              = "RH_USER,ADMIN",
                     Actif                     = true,
                     DateCreation              = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
-                    RequiertPKCE              = true,
+                    RequiertPKCE              = false,
                     TokenLifetimeSecondes     = 900,
                     RefreshTokenLifetimeJours = 7
                 },
@@ -208,13 +194,13 @@ namespace Data.Context
                     Description               = "Plateforme Finance Poulina",
                     ClientId                  = "finance-client",
                     ClientSecretHash          = "finance-secret-hash",
-                    RedirectionUris           = "http://localhost:3002/callback",
+                    RedirectionUris           = "http://localhost:3002",
                     PostLogoutRedirectionUris = "http://localhost:3002",
                     AllowedScopes             = "openid profile email offline_access",
                     AllowedRoles              = "FINANCE_USER,ADMIN",
                     Actif                     = true,
                     DateCreation              = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
-                    RequiertPKCE              = true,
+                    RequiertPKCE              = false,
                     TokenLifetimeSecondes     = 900,
                     RefreshTokenLifetimeJours = 7
                 },
@@ -225,13 +211,13 @@ namespace Data.Context
                     Description               = "Dashboard analytique Poulina",
                     ClientId                  = "dashboard-client",
                     ClientSecretHash          = "dashboard-secret-hash",
-                    RedirectionUris           = "http://localhost:3003/callback",
+                    RedirectionUris           = "http://localhost:3003",
                     PostLogoutRedirectionUris = "http://localhost:3003",
                     AllowedScopes             = "openid profile email offline_access",
                     AllowedRoles              = "DASHBOARD_VIEWER,ADMIN",
                     Actif                     = true,
                     DateCreation              = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
-                    RequiertPKCE              = true,
+                    RequiertPKCE              = false,
                     TokenLifetimeSecondes     = 900,
                     RefreshTokenLifetimeJours = 7
                 }
