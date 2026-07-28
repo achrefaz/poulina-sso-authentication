@@ -15,4 +15,5 @@ obj/
 API/appsettings.json
 Data/Migrations
 
+
 .env
