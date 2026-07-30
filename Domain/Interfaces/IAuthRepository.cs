@@ -37,6 +37,9 @@ namespace Domain.Interfaces
         // ── Email Verification ────────────────────────────────────────────────
         Task<Utilisateur?> GetUtilisateurByTokenVerificationAsync(string tokenHash, CancellationToken ct = default);
 
+        // ── Reset Password ────────────────────────────────────────────────────
+        Task<Utilisateur?> GetUtilisateurByTokenResetAsync(string tokenHash, CancellationToken ct = default);
+
         // ── Audit Logs ────────────────────────────────────────────────────────
         Task<(List<AuditLogDto> Items, int Total)> GetAuditLogsAsync(
             int page,

@@ -9,7 +9,9 @@ using Domain.Interfaces;
 using Infra.Security;
 using Infra.Services;
 using Domain.Handlers.Auth;
+using Domain.Validators;
 using API.Middleware;
+using FluentValidation;
 using Microsoft.AspNetCore.RateLimiting;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -31,9 +33,15 @@ builder.Services.AddScoped<IPasswordHasher, PasswordHasher>();
 // ── Email Service (Brevo SMTP) ────────────────────────────────────────────────
 builder.Services.AddScoped<IEmailService, BrevoEmailService>();
 
+// ── Validation (FluentValidation) ──────────────────────────────────────────────
+builder.Services.AddValidatorsFromAssembly(typeof(RegisterHandler).Assembly);
+
 // ── MediatR ───────────────────────────────────────────────────────────────────
 builder.Services.AddMediatR(cfg =>
-    cfg.RegisterServicesFromAssembly(typeof(RegisterHandler).Assembly));
+{
+    cfg.RegisterServicesFromAssembly(typeof(RegisterHandler).Assembly);
+    cfg.AddOpenBehavior(typeof(ValidationBehaviour<,>));
+});
 
 // ── CORS ──────────────────────────────────────────────────────────────────────
 builder.Services.AddCors(options =>
@@ -123,6 +131,25 @@ app.Use(async (context, next) =>
     context.Response.Headers["Referrer-Policy"]        = "strict-origin-when-cross-origin";
     context.Response.Headers["Permissions-Policy"]     = "geolocation=(), microphone=(), camera=()";
     await next();
+});
+
+// ── Gestion globale des erreurs de validation (FluentValidation) ──────────────
+app.Use(async (context, next) =>
+{
+    try
+    {
+        await next();
+    }
+    catch (ValidationException ex)
+    {
+        context.Response.StatusCode  = 400;
+        context.Response.ContentType = "application/json";
+        await context.Response.WriteAsJsonAsync(new
+        {
+            message = "Erreur de validation.",
+            errors  = ex.Errors.Select(e => new { field = e.PropertyName, error = e.ErrorMessage })
+        });
+    }
 });
 
 app.UseCors("SsoClients");

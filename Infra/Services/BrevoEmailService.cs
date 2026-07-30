@@ -61,6 +61,20 @@ namespace Infra.Services
                 htmlBody: BuildHtmlCredentials(destinataireNom, destinataireEmail, motDePasseTemporaire),
                 ct);
 
+        // ── Réinitialisation mot de passe ─────────────────────────────────────
+
+        public Task EnvoyerReinitialisationMotDePasseAsync(
+          string destinataireEmail,
+          string destinataireNom,
+          string lienReinitialisation,
+          CancellationToken ct = default)
+          => EnvoyerAsync(
+            destinataireEmail,
+            destinataireNom,
+            sujet:    "Réinitialisation de votre mot de passe — Poulina SSO",
+            htmlBody: BuildHtmlResetPassword(destinataireNom, lienReinitialisation),
+            ct);
+        
         // ── Core SMTP ─────────────────────────────────────────────────────────
 
         private async Task EnvoyerAsync(
@@ -308,5 +322,75 @@ namespace Infra.Services
             </body>
             </html>
             """;
+        
+        private static string BuildHtmlResetPassword(string nom, string lien) => $"""
+    <!DOCTYPE html>
+    <html lang="fr">
+    <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+    <body style="margin:0;padding:0;background:#f4f6f8;font-family:Arial,sans-serif;">
+      <table width="100%" cellpadding="0" cellspacing="0">
+        <tr><td align="center" style="padding:40px 20px;">
+          <table width="600" cellpadding="0" cellspacing="0"
+                 style="background:#ffffff;border-radius:8px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.1);">
+            <tr>
+              <td style="background:#1a3a5c;padding:32px 40px;text-align:center;">
+                <h1 style="margin:0;color:#ffffff;font-size:24px;font-weight:700;">Poulina SSO</h1>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:40px;">
+                <h2 style="margin:0 0 16px;color:#111827;font-size:20px;">Bonjour {nom},</h2>
+                <p style="margin:0 0 24px;color:#374151;font-size:15px;line-height:1.6;">
+                  Vous avez demandé la réinitialisation de votre mot de passe.<br>
+                  Cliquez sur le bouton ci-dessous pour choisir un nouveau mot de passe.
+                </p>
+                <table cellpadding="0" cellspacing="0" width="100%">
+                  <tr>
+                    <td align="center" style="padding:8px 0 32px;">
+                      <a href="{lien}"
+                         style="display:inline-block;background:#1a3a5c;color:#ffffff;
+                                text-decoration:none;padding:14px 32px;border-radius:6px;
+                                font-size:15px;font-weight:600;">
+                        Réinitialiser mon mot de passe
+                      </a>
+                    </td>
+                  </tr>
+                </table>
+                <p style="margin:0 0 8px;color:#6b7280;font-size:13px;">
+                  Ce lien est valable <strong>1 heure</strong>.
+                </p>
+                <p style="margin:0 0 20px;color:#6b7280;font-size:13px;">
+                  <a href="{lien}" style="color:#1a3a5c;word-break:break-all;">{lien}</a>
+                </p>
+                <table cellpadding="0" cellspacing="0" width="100%"
+                       style="background:#fffbeb;border:1px solid #fcd34d;border-radius:8px;">
+                  <tr>
+                    <td style="padding:16px 20px;">
+                      <p style="margin:0;color:#92400e;font-size:13px;line-height:1.5;">
+                        ⚠️ Si vous n'êtes pas à l'origine de cette demande, ignorez cet email — votre mot
+                        de passe actuel reste inchangé.
+                      </p>
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+            <tr>
+              <td style="background:#f9fafb;padding:20px 40px;text-align:center;border-top:1px solid #e5e7eb;">
+                <p style="margin:0;color:#9ca3af;font-size:12px;">
+                  © 2025 Poulina Group — Système SSO
+                </p>
+              </td>
+            </tr>
+          </table>
+        </td></tr>
+      </table>
+    </body>
+    </html>
+    """;
+        
+        
     }
+    
+    
 }

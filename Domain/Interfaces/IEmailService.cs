@@ -22,5 +22,12 @@
             string destinataireNom,
             string motDePasseTemporaire,
             CancellationToken ct = default);
+
+        // Envoi du lien de réinitialisation de mot de passe (mot de passe oublié)
+        Task EnvoyerReinitialisationMotDePasseAsync(
+            string destinataireEmail,
+            string destinataireNom,
+            string lienReinitialisation,
+            CancellationToken ct = default);
     }
 }

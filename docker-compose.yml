@@ -9,16 +9,16 @@ services:
     restart: unless-stopped
     environment:
       ACCEPT_EULA: "Y"
-      MSSQL_SA_PASSWORD: "${DB_SA_PASSWORD:-Poulina@SSO2024!}"
-      MSSQL_PID: "Developer"        
+      MSSQL_SA_PASSWORD: "${DB_SA_PASSWORD:-Poulina@SSO2026!}"
+      MSSQL_PID: "Developer"
     ports:
-      - "1433:1433"                 
+      - "1433:1433"
     volumes:
       - sqlserver_data:/var/opt/mssql
     healthcheck:
       test: >
         /opt/mssql-tools18/bin/sqlcmd
-        -S localhost -U sa -P "${DB_SA_PASSWORD:-Poulina@SSO2024!}"
+        -S localhost -U sa -P "${DB_SA_PASSWORD:-Poulina@SSO2026!}"
         -Q "SELECT 1" -No
       interval: 10s
       timeout: 5s
@@ -37,22 +37,23 @@ services:
       sqlserver:
         condition: service_healthy
     ports:
-      - "5095:8080"                 
+      - "5095:8080"
     environment:
       ASPNETCORE_ENVIRONMENT: "${ASPNETCORE_ENVIRONMENT:-Development}"
       ConnectionStrings__DefaultConnection: >-
         Server=sqlserver,1433;
         Database=PoulinaSSODB;
         User Id=sa;
-        Password=${DB_SA_PASSWORD:-Poulina@SSO2024!};
+        Password=${DB_SA_PASSWORD:-Poulina@SSO2026!};
         TrustServerCertificate=True;
         MultipleActiveResultSets=true
-      JwtSettings__SecretKey:         "${JWT_SECRET:-PoulinaSSO-SuperSecretKey-2024!@#$}"
+      JwtSettings__SecretKey:         "${JWT_SECRET:-PoulinaSSO-SuperSecretKey-2026!@#$}"
       JwtSettings__Issuer:            "${JWT_ISSUER:-http://localhost:5095}"
       JwtSettings__Audience:          "${JWT_AUDIENCE:-http://localhost:5095}"
       JwtSettings__ExpirationMinutes: "15"
       JwtSettings__TokenLifetimeSecondes: "900"
       AppSettings__BaseUrl:           "${BASE_URL:-http://localhost:5095}"
+      AppSettings__FrontendBaseUrl:   "${FRONTEND_URL:-http://localhost/sso}"
       Brevo__SmtpLogin:               "${BREVO_LOGIN}"
       Brevo__SmtpPassword:            "${BREVO_PASSWORD}"
       Brevo__ExpéditeurEmail:         "${BREVO_FROM_EMAIL:-noreply@poulina.com}"

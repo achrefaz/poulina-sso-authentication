@@ -442,6 +442,12 @@ namespace Data.Migrations
                     b.Property<int>("TentativesConnexionEchouees")
                         .HasColumnType("int");
 
+                    b.Property<DateTime?>("TokenResetExpiration")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("TokenResetMotDePasse")
+                        .HasColumnType("nvarchar(max)");
+
                     b.Property<string>("TokenVerificationEmail")
                         .HasMaxLength(512)
                         .HasColumnType("nvarchar(512)");

@@ -9,6 +9,8 @@ using Domain.Interfaces;
 using Domain.Models;
 using Domain.Models.Enums;
 using Infra.Security;
+using FluentValidation;
+using Domain.Commands.Users;
 
 namespace API.Controllers;
 
@@ -21,17 +23,23 @@ public class UserController : ControllerBase
     private readonly IPasswordHasher      _passwordHasher;
     private readonly IEmailService        _emailService;
     private readonly IConfiguration       _configuration;
+    private readonly IValidator<CreateUserRequest>     _createUserValidator;
+    private readonly IValidator<ChangePasswordRequest> _changePasswordValidator;
 
     public UserController(
         ApplicationDbContext context,
         IPasswordHasher      passwordHasher,
         IEmailService        emailService,
-        IConfiguration       configuration)
+        IConfiguration       configuration,
+        IValidator<CreateUserRequest>     createUserValidator,
+        IValidator<ChangePasswordRequest> changePasswordValidator)
     {
-        _context        = context;
-        _passwordHasher = passwordHasher;
-        _emailService   = emailService;
-        _configuration  = configuration;
+        _context                = context;
+        _passwordHasher         = passwordHasher;
+        _emailService           = emailService;
+        _configuration          = configuration;
+        _createUserValidator     = createUserValidator;
+        _changePasswordValidator = changePasswordValidator;
     }
 
     // ── Profil ─────────────────────────────────────────────────────────────
@@ -77,6 +85,14 @@ public class UserController : ControllerBase
         var user = await _context.Utilisateurs.FindAsync(userId);
         if (user == null) return NotFound(new { message = "Utilisateur introuvable." });
 
+        var validation = await _changePasswordValidator.ValidateAsync(request);
+        if (!validation.IsValid)
+            return BadRequest(new
+            {
+                message = validation.Errors.First().ErrorMessage,
+                errors  = validation.Errors.Select(e => new { field = e.PropertyName, error = e.ErrorMessage })
+            });
+
         if (!user.DoitChangerMotDePasse)
         {
             if (string.IsNullOrEmpty(request.AncienMotDePasse))
@@ -88,12 +104,6 @@ public class UserController : ControllerBase
                 return Unauthorized(new { message = "Ancien mot de passe incorrect." });
             }
         }
-
-        if (string.IsNullOrEmpty(request.NouveauMotDePasse) || request.NouveauMotDePasse.Length < 8)
-            return BadRequest(new { message = "Le nouveau mot de passe doit contenir au moins 8 caractères." });
-
-        if (request.NouveauMotDePasse != request.ConfirmationMotDePasse)
-            return BadRequest(new { message = "Les mots de passe ne correspondent pas." });
 
         if (_passwordHasher.Verify(request.NouveauMotDePasse, user.MotDePasseHash))
             return BadRequest(new { message = "Le nouveau mot de passe doit être différent de l'ancien." });
@@ -135,11 +145,13 @@ public class UserController : ControllerBase
         var adminId = GetCurrentUserId();
         if (adminId == null) return Unauthorized();
 
-        if (string.IsNullOrWhiteSpace(request.Email) || string.IsNullOrWhiteSpace(request.Password))
-            return BadRequest(new { message = "Email et mot de passe requis." });
-
-        if (request.Password.Length < 8)
-            return BadRequest(new { message = "Le mot de passe doit contenir au moins 8 caractères." });
+        var validation = await _createUserValidator.ValidateAsync(request);
+        if (!validation.IsValid)
+            return BadRequest(new
+            {
+                message = validation.Errors.First().ErrorMessage,
+                errors  = validation.Errors.Select(e => new { field = e.PropertyName, error = e.ErrorMessage })
+            });
 
         var existingUser = await _context.Utilisateurs
             .FirstOrDefaultAsync(u => u.Email == request.Email.Trim().ToLower());
@@ -148,9 +160,7 @@ public class UserController : ControllerBase
             return BadRequest(new { message = "Un utilisateur avec cet email existe déjà." });
 
         var (rawToken, tokenHash) = GenererTokenVerification();
-
-        // On conserve le mot de passe en clair AVANT le hachage pour l'envoyer par email.
-        // Il n'est jamais persisté — uniquement utilisé dans cette portée locale.
+        
         var motDePasseEnClair = request.Password;
 
         var user = new Utilisateur
@@ -614,33 +624,4 @@ public class UserController : ControllerBase
         var hash = Convert.ToBase64String(sha256.ComputeHash(Encoding.UTF8.GetBytes(raw)));
         return (raw, hash);
     }
-}
-
-// ── DTOs ───────────────────────────────────────────────────────────────────
-
-public class CreateUserRequest
-{
-    public string       Email    { get; set; } = string.Empty;
-    public string       Password { get; set; } = string.Empty;
-    public string       Nom      { get; set; } = string.Empty;
-    public string       Prenom   { get; set; } = string.Empty;
-    public List<Guid>?  RoleIds  { get; set; }
-}
-
-public class BloquerRequest
-{
-    public string Raison { get; set; } = string.Empty;
-}
-
-public class CreateRoleRequest
-{
-    public string Nom         { get; set; } = string.Empty;
-    public string Description { get; set; } = string.Empty;
-}
-
-public class ChangePasswordRequest
-{
-    public string? AncienMotDePasse       { get; set; }
-    public string  NouveauMotDePasse      { get; set; } = string.Empty;
-    public string  ConfirmationMotDePasse { get; set; } = string.Empty;
 }
