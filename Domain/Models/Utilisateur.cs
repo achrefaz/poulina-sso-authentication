@@ -34,6 +34,10 @@ namespace Domain.Models
 
         
         public DateTime? TokenVerificationExpiration { get; set; }
+        
+        // ── Reset Password
+        public string?   TokenResetMotDePasse { get; set; }
+        public DateTime? TokenResetExpiration { get; set; }
 
         public virtual ICollection<Session> Sessions { get; set; } = new List<Session>();
         public virtual ICollection<RefreshToken> RefreshTokens { get; set; } = new List<RefreshToken>();

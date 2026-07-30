@@ -9,11 +9,7 @@ using Xunit;
 
 namespace PoulinaSSO.Tests.Handlers;
 
-/// <summary>
-/// Tests unitaires pour RegisterHandler et la vérification d'email.
-/// Couvre : email de confirmation envoyé à la création, email déjà existant,
-/// mot de passe trop court.
-/// </summary>
+
 public class EmailVerificationHandlerTests
 {
     private readonly Mock<IAuthRepository> _repoMock;
@@ -97,7 +93,7 @@ public class EmailVerificationHandlerTests
         var cmd = new RegisterCommand(new RegisterRequest
         {
             Email    = "user@poulina.com",
-            Password = "abc",   // < 8 caractères
+            Password = "abc",
             Nom      = "Dupont",
             Prenom   = "Jean"
         });

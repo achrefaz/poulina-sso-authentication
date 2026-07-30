@@ -150,6 +150,13 @@ namespace Data.Repositories
             string tokenHash, CancellationToken ct = default)
             => _context.Utilisateurs
                 .FirstOrDefaultAsync(u => u.TokenVerificationEmail == tokenHash, ct);
+        
+        // ── Reset Password ───────────────────────────────────────────────────
+
+        public Task<Utilisateur?> GetUtilisateurByTokenResetAsync(
+            string tokenHash, CancellationToken ct = default)
+            => _context.Utilisateurs
+                .FirstOrDefaultAsync(u => u.TokenResetMotDePasse == tokenHash, ct);
 
         // ── Audit Logs ────────────────────────────────────────────────────────
 

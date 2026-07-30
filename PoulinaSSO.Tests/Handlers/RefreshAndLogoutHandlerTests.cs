@@ -10,11 +10,7 @@ using Xunit;
 
 namespace PoulinaSSO.Tests.Handlers;
 
-/// <summary>
-/// Tests unitaires pour RefreshTokenHandler.
-/// Scénarios : token valide (rotation), token déjà utilisé, token expiré,
-/// token introuvable, compte bloqué, rôle insuffisant pour le client cible.
-/// </summary>
+
 public class RefreshTokenHandlerTests
 {
     private readonly Mock<IAuthRepository> _repoMock;
@@ -166,11 +162,7 @@ public class RefreshTokenHandlerTests
     }
 }
 
-/// <summary>
-/// Tests unitaires pour LogoutHandler.
-/// Scénarios : logout avec refresh token spécifique, logout global (révoque tout),
-/// révocation du JWT via blacklist.
-/// </summary>
+
 public class LogoutHandlerTests
 {
     private readonly Mock<IAuthRepository> _repoMock;

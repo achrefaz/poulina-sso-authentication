@@ -320,4 +320,26 @@ public class AuthController : ControllerBase
         var result = await _mediator.Send(new RenvoyerConfirmationEmailCommand(request.Email));
         return Ok(new { message = result.Message });
     }
+    
+    // Forgot Password
+
+    [HttpPost("forgot-password")]
+    [EnableRateLimiting("login")]
+    public async Task<IActionResult> ForgotPassword([FromBody] ForgotPasswordRequest request)
+    {
+        var result = await _mediator.Send(new ForgotPasswordCommand(request));
+        return Ok(new { message = result.Message });
+    }
+
+// Reset Password
+
+    [HttpPost("reset-password")]
+    public async Task<IActionResult> ResetPassword([FromBody] ResetPasswordRequest request)
+    {
+        var result = await _mediator.Send(new ResetPasswordCommand(request));
+
+        return result.Success
+            ? Ok(new { message = result.Message })
+            : BadRequest(new { message = result.Message, errorCode = result.ErrorCode });
+    }
 }
