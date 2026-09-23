@@ -2,7 +2,6 @@
 
 namespace Domain.Queries.Auth
 {
-    // ── UserInfo (OpenID Connect) ─────────────────────────────────────────
     public record GetUserInfoQuery(Guid UserId) : IRequest<UserInfoResult>;
 
     public class UserInfoResult
@@ -17,8 +16,7 @@ namespace Domain.Queries.Auth
         public bool DoitChangerMotDePasse { get; set; }
         public bool MfaEnabled { get; set; }
     }
-
-    // ── Authorize step 1 (validation paramètres OAuth2) ───────────────────
+    
     public record AuthorizeQuery(
         string ClientId,
         string RedirectUri,

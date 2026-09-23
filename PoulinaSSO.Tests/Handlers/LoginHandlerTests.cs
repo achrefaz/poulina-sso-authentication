@@ -25,7 +25,11 @@ public class LoginDirectHandlerTests
     {
         _repoMock   = RepoMockHelper.Create();
         _hasherMock = new Mock<IPasswordHasher>();
-        _handler    = new LoginDirectHandler(_repoMock.Object, FakeConfiguration.Build(), _hasherMock.Object);
+        _handler    = new LoginDirectHandler(
+            _repoMock.Object,
+            FakeConfiguration.Build(),
+            _hasherMock.Object,
+            new Mock<ISsoMetrics>().Object);
     }
 
     private LoginDirectCommand BuildCommand(string email = "user@test.com", string password = "Password123!")

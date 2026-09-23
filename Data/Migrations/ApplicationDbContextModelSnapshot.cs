@@ -82,10 +82,6 @@ namespace Data.Migrations
                         .HasMaxLength(500)
                         .HasColumnType("nvarchar(500)");
 
-                    b.Property<string>("AllowedScopes")
-                        .IsRequired()
-                        .HasColumnType("nvarchar(max)");
-
                     b.Property<string>("ClientId")
                         .IsRequired()
                         .HasMaxLength(100)
@@ -110,19 +106,8 @@ namespace Data.Migrations
                         .HasMaxLength(100)
                         .HasColumnType("nvarchar(100)");
 
-                    b.Property<string>("PostLogoutRedirectionUris")
-                        .IsRequired()
-                        .HasColumnType("nvarchar(max)");
-
-                    b.Property<string>("RedirectionUris")
-                        .IsRequired()
-                        .HasColumnType("nvarchar(max)");
-
                     b.Property<int>("RefreshTokenLifetimeJours")
                         .HasColumnType("int");
-
-                    b.Property<bool>("RequiertPKCE")
-                        .HasColumnType("bit");
 
                     b.Property<int>("TokenLifetimeSecondes")
                         .HasColumnType("int");
@@ -140,16 +125,12 @@ namespace Data.Migrations
                             Id = new Guid("11111111-1111-1111-1111-111111111111"),
                             Actif = true,
                             AllowedRoles = "RH_USER,ADMIN",
-                            AllowedScopes = "openid profile email offline_access",
                             ClientId = "rh-client",
                             ClientSecretHash = "rh-secret-hash",
                             DateCreation = new DateTime(2025, 1, 1, 0, 0, 0, 0, DateTimeKind.Utc),
                             Description = "Plateforme RH Poulina",
                             Nom = "RH Application",
-                            PostLogoutRedirectionUris = "http://localhost:3001",
-                            RedirectionUris = "http://localhost:3001",
                             RefreshTokenLifetimeJours = 7,
-                            RequiertPKCE = false,
                             TokenLifetimeSecondes = 900
                         },
                         new
@@ -157,16 +138,12 @@ namespace Data.Migrations
                             Id = new Guid("22222222-2222-2222-2222-222222222222"),
                             Actif = true,
                             AllowedRoles = "FINANCE_USER,ADMIN",
-                            AllowedScopes = "openid profile email offline_access",
                             ClientId = "finance-client",
                             ClientSecretHash = "finance-secret-hash",
                             DateCreation = new DateTime(2025, 1, 1, 0, 0, 0, 0, DateTimeKind.Utc),
                             Description = "Plateforme Finance Poulina",
                             Nom = "Finance Application",
-                            PostLogoutRedirectionUris = "http://localhost:3002",
-                            RedirectionUris = "http://localhost:3002",
                             RefreshTokenLifetimeJours = 7,
-                            RequiertPKCE = false,
                             TokenLifetimeSecondes = 900
                         },
                         new
@@ -174,16 +151,12 @@ namespace Data.Migrations
                             Id = new Guid("33333333-3333-3333-3333-333333333333"),
                             Actif = true,
                             AllowedRoles = "DASHBOARD_VIEWER,ADMIN",
-                            AllowedScopes = "openid profile email offline_access",
                             ClientId = "dashboard-client",
                             ClientSecretHash = "dashboard-secret-hash",
                             DateCreation = new DateTime(2025, 1, 1, 0, 0, 0, 0, DateTimeKind.Utc),
                             Description = "Dashboard analytique Poulina",
                             Nom = "Dashboard",
-                            PostLogoutRedirectionUris = "http://localhost:3003",
-                            RedirectionUris = "http://localhost:3003",
                             RefreshTokenLifetimeJours = 7,
-                            RequiertPKCE = false,
                             TokenLifetimeSecondes = 900
                         });
                 });

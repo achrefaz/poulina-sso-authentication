@@ -111,16 +111,12 @@ public class ClientApplicationBuilder
         Id              = Guid.NewGuid(),
         ClientId        = "rh-app",
         Nom             = "RH Application",
-        RedirectionUris = "http://localhost:3001/callback",
         AllowedRoles    = "RH_USER,RH_ADMIN",
-        RequiertPKCE    = true,
         Actif           = true,
     };
 
     public ClientApplicationBuilder WithClientId(string id)     { _c.ClientId = id;         return this; }
-    public ClientApplicationBuilder WithRedirectUri(string uri) { _c.RedirectionUris = uri; return this; }
     public ClientApplicationBuilder WithAllowedRoles(string r)  { _c.AllowedRoles = r;      return this; }
-    public ClientApplicationBuilder WithRequiertPKCE(bool v)    { _c.RequiertPKCE = v;      return this; }
     public ClientApplication Build() => _c;
 }
 

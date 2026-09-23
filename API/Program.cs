@@ -14,15 +14,30 @@ using API.Middleware;
 using FluentValidation;
 using Microsoft.AspNetCore.RateLimiting;
 
+using OpenTelemetry.Metrics;
+using OpenTelemetry.Resources;
+using HealthChecks.UI.Client;
+using Infra.Metrics;
+using Microsoft.AspNetCore.Diagnostics.HealthChecks;
+
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSingleton<ISsoMetrics, SsoMetrics>();
 builder.Services.AddSwaggerGen();
+
 
 // ── DbContext ─────────────────────────────────────────────────────────────────
 builder.Services.AddDbContext<ApplicationDbContext>(options =>
     options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
+
+// ── Health Checks ─────────────────────────────────────────────────────────────
+builder.Services.AddHealthChecks()
+    .AddSqlServer(
+        connectionString: builder.Configuration.GetConnectionString("DefaultConnection")!,
+        name: "sqlserver",
+        tags: new[] { "db", "sql" });
 
 // ── Repositories ──────────────────────────────────────────────────────────────
 builder.Services.AddScoped<IAuthRepository, AuthRepository>();
@@ -63,7 +78,6 @@ builder.Services.AddCors(options =>
 // ── Rate Limiting ─────────────────────────────────────────────────────────────
 builder.Services.AddRateLimiter(options =>
 {
-    // 5 requêtes par minute par ip
     options.AddFixedWindowLimiter("login", o =>
     {
         o.PermitLimit          = 5;
@@ -106,6 +120,20 @@ builder.Services.AddAuthentication(options =>
         ClockSkew                = TimeSpan.Zero
     };
 });
+
+
+builder.Services.AddOpenTelemetry()
+    .ConfigureResource(resource => resource
+        .AddService(serviceName: "PoulinaSSO.API"))
+    .WithMetrics(metrics =>
+    {
+        metrics
+            .AddAspNetCoreInstrumentation()   
+            .AddHttpClientInstrumentation()   
+            .AddRuntimeInstrumentation() 
+            .AddMeter(SsoMetrics.MeterName)
+            .AddPrometheusExporter();         
+    });
 
 var app = builder.Build();
 
@@ -158,5 +186,13 @@ app.UseAuthentication();
 app.UseMiddleware<TokenBlacklistMiddleware>();
 app.UseAuthorization();
 app.MapControllers();
+
+
+app.MapPrometheusScrapingEndpoint();
+
+app.MapHealthChecks("/health", new HealthCheckOptions
+{
+    ResponseWriter = UIResponseWriter.WriteHealthCheckUIResponse
+});
 
 app.Run();

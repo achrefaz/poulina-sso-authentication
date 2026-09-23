@@ -21,7 +21,11 @@ public class RefreshTokenHandlerTests
     {
         _repoMock   = RepoMockHelper.Create();
         _hasherMock = new Mock<IPasswordHasher>();
-        _handler    = new RefreshTokenHandler(_repoMock.Object, FakeConfiguration.Build(), _hasherMock.Object);
+        _handler    = new RefreshTokenHandler(
+            _repoMock.Object,
+            FakeConfiguration.Build(),
+            _hasherMock.Object,
+            new Mock<ISsoMetrics>().Object);
     }
 
     private static RefreshToken BuildRefreshToken(Domain.Models.Utilisateur user, bool used = false, int expirationDays = 7)
@@ -175,7 +179,11 @@ public class LogoutHandlerTests
         _hasherMock = new Mock<IPasswordHasher>();
         _repoMock.Setup(r => r.RevokeJwtAsync(It.IsAny<string>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
                  .Returns(Task.CompletedTask);
-        _handler = new LogoutHandler(_repoMock.Object, FakeConfiguration.Build(), _hasherMock.Object);
+        _handler = new LogoutHandler(
+            _repoMock.Object,
+            FakeConfiguration.Build(),
+            _hasherMock.Object,
+            new Mock<ISsoMetrics>().Object);
     }
 
     // ── Logout avec refresh token spécifique ─────────────────────────────────
