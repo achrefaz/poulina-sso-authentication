@@ -37,7 +37,7 @@ jobs:
 
       - name: Extract Docker metadata
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 
         with:
           images: ${{ env.IMAGE_NAME }}
           tags: |
@@ -46,7 +46,7 @@ jobs:
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
 
       - name: Build and push Docker image
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@0565240e2d4ab88bba5387d719585280857ece09 
         with:
           context: .
           file: ./API/Dockerfile
