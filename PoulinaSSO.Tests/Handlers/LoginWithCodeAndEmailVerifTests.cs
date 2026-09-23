@@ -37,7 +37,11 @@ public class EmailVerificationHandlerTests
     public async Task Register_NouvelUtilisateur_EnvoieEmailDeConfirmation()
     {
         var handler = new RegisterHandler(
-            _repoMock.Object, FakeConfiguration.Build(), _hasherMock.Object, _emailMock.Object);
+            _repoMock.Object,
+            FakeConfiguration.Build(),
+            _hasherMock.Object,
+            _emailMock.Object,
+            new Mock<ISsoMetrics>().Object);
 
         _repoMock.Setup(r => r.EmailExisteAsync(It.IsAny<string>(), default)).ReturnsAsync(false);
         _hasherMock.Setup(h => h.Hash(It.IsAny<string>())).Returns("hashed_pw");
@@ -64,7 +68,11 @@ public class EmailVerificationHandlerTests
     public async Task Register_EmailDejaExistant_RetourneEchec()
     {
         var handler = new RegisterHandler(
-            _repoMock.Object, FakeConfiguration.Build(), _hasherMock.Object, _emailMock.Object);
+            _repoMock.Object,
+            FakeConfiguration.Build(),
+            _hasherMock.Object,
+            _emailMock.Object,
+            new Mock<ISsoMetrics>().Object);
 
         _repoMock.Setup(r => r.EmailExisteAsync(It.IsAny<string>(), default)).ReturnsAsync(true);
 
@@ -88,7 +96,11 @@ public class EmailVerificationHandlerTests
     public async Task Register_MotDePasseTropCourt_RetourneEchec()
     {
         var handler = new RegisterHandler(
-            _repoMock.Object, FakeConfiguration.Build(), _hasherMock.Object, _emailMock.Object);
+            _repoMock.Object,
+            FakeConfiguration.Build(),
+            _hasherMock.Object,
+            _emailMock.Object,
+            new Mock<ISsoMetrics>().Object);
 
         var cmd = new RegisterCommand(new RegisterRequest
         {

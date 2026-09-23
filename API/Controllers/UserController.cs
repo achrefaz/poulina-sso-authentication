@@ -458,9 +458,6 @@ public class UserController : ControllerBase
                 c.Description,
                 c.ClientId,
                 c.AllowedRoles,
-                c.AllowedScopes,
-                c.RedirectionUris,
-                c.RequiertPKCE,
                 c.TokenLifetimeSecondes,
                 c.RefreshTokenLifetimeJours,
                 c.DateCreation

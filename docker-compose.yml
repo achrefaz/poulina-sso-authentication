@@ -65,9 +65,87 @@ services:
       retries: 3
       start_period: 40s
 
+  #  Node Exporter 
+  node-exporter:
+    image: prom/node-exporter:latest
+    container_name: poulina-sso-node-exporter
+    restart: unless-stopped
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.rootfs=/rootfs'
+      - '--path.sysfs=/host/sys'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+    ports:
+      - "9100:9100"
+
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:latest
+    container_name: poulina-sso-cadvisor
+    restart: unless-stopped
+    privileged: true
+    devices:
+      - /dev/kmsg:/dev/kmsg
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    ports:
+      - "8081:8080"
+
+  # ── Prometheus ────────────────────────────────────────────────────────────
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: poulina-sso-prometheus
+    restart: unless-stopped
+    depends_on:
+      - api
+      - node-exporter   
+      - cadvisor        
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.enable-lifecycle'
+
+  # ── Grafana ───────────────────────────────────────────────────────────────
+  grafana:
+    image: grafana/grafana:latest
+    container_name: poulina-sso-grafana
+    restart: unless-stopped
+    depends_on:
+      - prometheus
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: "admin"
+      GF_SECURITY_ADMIN_PASSWORD: "admin"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_SMTP_ENABLED: "true"
+      GF_SMTP_HOST: "smtp-relay.brevo.com:587"
+      GF_SMTP_USER: "${BREVO_LOGIN}"
+      GF_SMTP_PASSWORD: "${BREVO_PASSWORD}"
+      GF_SMTP_FROM_ADDRESS: "${BREVO_FROM_EMAIL}"
+      GF_SMTP_FROM_NAME: "${BREVO_FROM_NAME}"
+    volumes:
+      - grafana_data:/var/lib/grafana
+
 volumes:
   sqlserver_data:
     name: poulina-sso-sqldata
+  prometheus_data:
+    name: poulina-sso-prometheus-data
+  grafana_data:
+    name: poulina-sso-grafana-data
 
 networks:
   default:

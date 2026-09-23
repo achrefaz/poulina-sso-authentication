@@ -1,4 +1,4 @@
-﻿using MediatR;
+﻿﻿using MediatR;
 using Microsoft.Extensions.Configuration;
 using Microsoft.IdentityModel.Tokens;
 using System.IdentityModel.Tokens.Jwt;
@@ -21,15 +21,18 @@ namespace Domain.Handlers.Auth
         protected readonly IAuthRepository _repo;
         protected readonly IConfiguration  _configuration;
         protected readonly IPasswordHasher _passwordHasher;
+        protected readonly ISsoMetrics     _metrics;
 
         protected AuthHandlerBase(
             IAuthRepository repo,
             IConfiguration  configuration,
-            IPasswordHasher passwordHasher)
+            IPasswordHasher passwordHasher,
+            ISsoMetrics     metrics)
         {
             _repo           = repo;
             _configuration  = configuration;
             _passwordHasher = passwordHasher;
+            _metrics        = metrics;
         }
 
         protected (string Token, string Jti) GenerateJwtToken(
@@ -204,8 +207,9 @@ namespace Domain.Handlers.Auth
             IAuthRepository repo,
             IConfiguration  cfg,
             IPasswordHasher ph,
-            IEmailService   emailService)
-            : base(repo, cfg, ph)
+            IEmailService   emailService,
+            ISsoMetrics     metrics)
+            : base(repo, cfg, ph, metrics)
         {
             _emailService = emailService;
         }
@@ -276,8 +280,12 @@ namespace Domain.Handlers.Auth
 
     public class LoginDirectHandler : AuthHandlerBase, IRequestHandler<LoginDirectCommand, LoginDirectResult>
     {
-        public LoginDirectHandler(IAuthRepository repo, IConfiguration cfg, IPasswordHasher ph)
-            : base(repo, cfg, ph) { }
+        public LoginDirectHandler(
+            IAuthRepository repo,
+            IConfiguration  cfg,
+            IPasswordHasher ph,
+            ISsoMetrics     metrics)
+            : base(repo, cfg, ph, metrics) { }
 
         public async Task<LoginDirectResult> Handle(LoginDirectCommand cmd, CancellationToken ct)
         {
@@ -291,24 +299,28 @@ namespace Domain.Handlers.Auth
             if (user == null)
             {
                 await LogAuditAsync(null, "LOGIN_FAILED", "AUTH", false, cmd.IpAddress, cmd.UserAgent, "Email introuvable");
+                _metrics.RecordLoginFailed("user_not_found");
                 return new LoginDirectResult { Success = false, Message = "Email ou mot de passe incorrect." };
             }
 
             if (user.Statut == StatutUtilisateur.BLOQUE)
             {
                 await LogAuditAsync(user.Id, "LOGIN_BLOCKED", "AUTH", false, cmd.IpAddress, cmd.UserAgent, user.RaisonBlocage);
+                _metrics.RecordLoginFailed("blocked");
                 return new LoginDirectResult { Success = false, ErrorCode = "BLOCKED", Message = "Compte bloqué. Contactez l'administrateur.", Raison = user.RaisonBlocage };
             }
 
             if (user.Statut == StatutUtilisateur.DESACTIVE)
             {
                 await LogAuditAsync(user.Id, "LOGIN_DISABLED", "AUTH", false, cmd.IpAddress, cmd.UserAgent);
+                _metrics.RecordLoginFailed("disabled");
                 return new LoginDirectResult { Success = false, ErrorCode = "DISABLED", Message = "Votre compte est désactivé." };
             }
 
             if (!user.EmailVerifie)
             {
                 await LogAuditAsync(user.Id, "LOGIN_EMAIL_NOT_VERIFIED", "AUTH", false, cmd.IpAddress, cmd.UserAgent);
+                _metrics.RecordLoginFailed("email_not_verified");
                 return new LoginDirectResult
                 {
                     Success       = false,
@@ -321,6 +333,7 @@ namespace Domain.Handlers.Auth
             if (user.DateVerrouillage.HasValue && user.DateVerrouillage > DateTime.UtcNow)
             {
                 await LogAuditAsync(user.Id, "LOGIN_LOCKED", "AUTH", false, cmd.IpAddress, cmd.UserAgent);
+                _metrics.RecordLoginFailed("account_locked");
                 return new LoginDirectResult { Success = false, ErrorCode = "LOCKED", Message = "Compte verrouillé temporairement. Réessayez dans 15 minutes." };
             }
 
@@ -328,10 +341,14 @@ namespace Domain.Handlers.Auth
             {
                 user.TentativesConnexionEchouees++;
                 if (user.TentativesConnexionEchouees >= 5)
+                {
                     user.DateVerrouillage = DateTime.UtcNow.AddMinutes(15);
+                    _metrics.RecordAccountLocked();
+                }
 
                 await _repo.SaveChangesAsync(ct);
                 await LogAuditAsync(user.Id, "LOGIN_FAILED", "AUTH", false, cmd.IpAddress, cmd.UserAgent, "Mot de passe incorrect");
+                _metrics.RecordLoginFailed("invalid_credentials");
                 return new LoginDirectResult { Success = false, Message = "Email ou mot de passe incorrect." };
             }
 
@@ -373,8 +390,7 @@ namespace Domain.Handlers.Auth
                     Message                = "Changement de mot de passe requis."
                 };
             }
-
-            // Login standard
+            
             user.DateDerniereConnexion = DateTime.UtcNow;
 
             await _repo.AddSessionAsync(new Session
@@ -401,6 +417,10 @@ namespace Domain.Handlers.Auth
 
             await _repo.SaveChangesAsync(ct);
             await LogAuditAsync(user.Id, "LOGIN_SUCCESS", "AUTH", true, cmd.IpAddress, cmd.UserAgent);
+            
+            _metrics.RecordLoginSuccess();
+            _metrics.RecordTokenIssued("access");
+            _metrics.RecordTokenIssued("refresh");
 
             return new LoginDirectResult
             {
@@ -419,8 +439,12 @@ namespace Domain.Handlers.Auth
 
     public class RefreshTokenHandler : AuthHandlerBase, IRequestHandler<RefreshTokenCommand, RefreshResult>
     {
-        public RefreshTokenHandler(IAuthRepository repo, IConfiguration cfg, IPasswordHasher ph)
-            : base(repo, cfg, ph) { }
+        public RefreshTokenHandler(
+            IAuthRepository repo,
+            IConfiguration  cfg,
+            IPasswordHasher ph,
+            ISsoMetrics     metrics)
+            : base(repo, cfg, ph, metrics) { }
 
         public async Task<RefreshResult> Handle(RefreshTokenCommand cmd, CancellationToken ct)
         {
@@ -483,6 +507,9 @@ namespace Domain.Handlers.Auth
 
             await _repo.SaveChangesAsync(ct);
             await LogAuditAsync(user.Id, "TOKEN_REFRESHED", "AUTH", true, cmd.IpAddress, "");
+            
+            _metrics.RecordTokenIssued("access");
+            _metrics.RecordTokenIssued("refresh");
 
             return new RefreshResult { Success = true, AccessToken = accessToken, RefreshToken = refreshToken };
         }
@@ -492,8 +519,12 @@ namespace Domain.Handlers.Auth
 
     public class LogoutHandler : AuthHandlerBase, IRequestHandler<LogoutCommand, LogoutResult>
     {
-        public LogoutHandler(IAuthRepository repo, IConfiguration cfg, IPasswordHasher ph)
-            : base(repo, cfg, ph) { }
+        public LogoutHandler(
+            IAuthRepository repo,
+            IConfiguration  cfg,
+            IPasswordHasher ph,
+            ISsoMetrics     metrics)
+            : base(repo, cfg, ph, metrics) { }
 
         public async Task<LogoutResult> Handle(LogoutCommand cmd, CancellationToken ct)
         {
@@ -536,8 +567,12 @@ namespace Domain.Handlers.Auth
 
     public class GetUserInfoHandler : AuthHandlerBase, IRequestHandler<GetUserInfoQuery, UserInfoResult>
     {
-        public GetUserInfoHandler(IAuthRepository repo, IConfiguration cfg, IPasswordHasher ph)
-            : base(repo, cfg, ph) { }
+        public GetUserInfoHandler(
+            IAuthRepository repo,
+            IConfiguration  cfg,
+            IPasswordHasher ph,
+            ISsoMetrics     metrics)
+            : base(repo, cfg, ph, metrics) { }
 
         public async Task<UserInfoResult> Handle(GetUserInfoQuery query, CancellationToken ct)
         {
@@ -565,8 +600,12 @@ namespace Domain.Handlers.Auth
 
     public class SetupMfaHandler : AuthHandlerBase, IRequestHandler<SetupMfaCommand, SetupMfaResult>
     {
-        public SetupMfaHandler(IAuthRepository repo, IConfiguration cfg, IPasswordHasher ph)
-            : base(repo, cfg, ph) { }
+        public SetupMfaHandler(
+            IAuthRepository repo,
+            IConfiguration  cfg,
+            IPasswordHasher ph,
+            ISsoMetrics     metrics)
+            : base(repo, cfg, ph, metrics) { }
 
         public async Task<SetupMfaResult> Handle(SetupMfaCommand cmd, CancellationToken ct)
         {
@@ -603,8 +642,12 @@ namespace Domain.Handlers.Auth
 
     public class VerifyMfaSetupHandler : AuthHandlerBase, IRequestHandler<VerifyMfaSetupCommand, VerifyMfaSetupResult>
     {
-        public VerifyMfaSetupHandler(IAuthRepository repo, IConfiguration cfg, IPasswordHasher ph)
-            : base(repo, cfg, ph) { }
+        public VerifyMfaSetupHandler(
+            IAuthRepository repo,
+            IConfiguration  cfg,
+            IPasswordHasher ph,
+            ISsoMetrics     metrics)
+            : base(repo, cfg, ph, metrics) { }
 
         public async Task<VerifyMfaSetupResult> Handle(VerifyMfaSetupCommand cmd, CancellationToken ct)
         {
@@ -638,8 +681,12 @@ namespace Domain.Handlers.Auth
 
     public class VerifyMfaLoginHandler : AuthHandlerBase, IRequestHandler<VerifyMfaLoginCommand, VerifyMfaLoginResult>
     {
-        public VerifyMfaLoginHandler(IAuthRepository repo, IConfiguration cfg, IPasswordHasher ph)
-            : base(repo, cfg, ph) { }
+        public VerifyMfaLoginHandler(
+            IAuthRepository repo,
+            IConfiguration  cfg,
+            IPasswordHasher ph,
+            ISsoMetrics     metrics)
+            : base(repo, cfg, ph, metrics) { }
 
         public async Task<VerifyMfaLoginResult> Handle(VerifyMfaLoginCommand cmd, CancellationToken ct)
         {
@@ -669,6 +716,7 @@ namespace Domain.Handlers.Auth
             {
                 await LogAuditAsync(userId, "MFA_VERIFY_FAILED", "AUTH", false, cmd.IpAddress, cmd.UserAgent, "Code TOTP incorrect");
                 await _repo.SaveChangesAsync(ct);
+                _metrics.RecordLoginFailed("invalid_totp");
                 return new VerifyMfaLoginResult
                 {
                     Success   = false,
@@ -704,6 +752,10 @@ namespace Domain.Handlers.Auth
 
             await _repo.SaveChangesAsync(ct);
             await LogAuditAsync(userId, "LOGIN_MFA_SUCCESS", "AUTH", true, cmd.IpAddress, cmd.UserAgent, "Connexion MFA réussie");
+            
+            _metrics.RecordLoginSuccess("mfa");
+            _metrics.RecordTokenIssued("access");
+            _metrics.RecordTokenIssued("refresh");
 
             return new VerifyMfaLoginResult
             {
@@ -721,8 +773,12 @@ namespace Domain.Handlers.Auth
 
     public class DisableMfaHandler : AuthHandlerBase, IRequestHandler<DisableMfaCommand, DisableMfaResult>
     {
-        public DisableMfaHandler(IAuthRepository repo, IConfiguration cfg, IPasswordHasher ph)
-            : base(repo, cfg, ph) { }
+        public DisableMfaHandler(
+            IAuthRepository repo,
+            IConfiguration  cfg,
+            IPasswordHasher ph,
+            ISsoMetrics     metrics)
+            : base(repo, cfg, ph, metrics) { }
 
         public async Task<DisableMfaResult> Handle(DisableMfaCommand cmd, CancellationToken ct)
         {

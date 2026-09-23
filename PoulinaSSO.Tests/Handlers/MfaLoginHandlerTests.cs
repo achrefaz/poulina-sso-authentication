@@ -25,7 +25,10 @@ public class MfaLoginHandlerTests
         _repoMock   = RepoMockHelper.Create();
         _hasherMock = new Mock<IPasswordHasher>();
         _handler    = new VerifyMfaLoginHandler(
-            _repoMock.Object, FakeConfiguration.Build(), _hasherMock.Object);
+            _repoMock.Object,
+            FakeConfiguration.Build(),
+            _hasherMock.Object,
+            new Mock<ISsoMetrics>().Object);
     }
 
     private VerifyMfaLoginCommand BuildCommand(
